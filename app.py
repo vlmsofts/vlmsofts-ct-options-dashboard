@@ -1,0 +1,436 @@
+from flask import Flask, render_template, jsonify
+import requests, csv, io, json, time, math
+from datetime import datetime, timedelta
+
+server = Flask(__name__)
+
+OPT_CSV_URL = "https://raw.githubusercontent.com/vlmsofts/oi-dashboard/main/data/options_oi.csv"
+OI_CSV_URL  = "https://raw.githubusercontent.com/vlmsofts/oi-dashboard/main/data/oi_data.csv"
+
+MONTH_CODE = {'F':1,'G':2,'H':3,'J':4,'K':5,'M':6,'N':7,'Q':8,'U':9,'V':10,'X':11,'Z':12}
+MONTH_NAME = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
+              7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
+
+_cache = {}
+CACHE_TTL = 300
+RISK_FREE  = 0.045
+
+# ── HTTP cache ────────────────────────────────────────────────────────────────
+
+def fetch_csv(url):
+    now = time.time()
+    if url in _cache and now - _cache[url]['ts'] < CACHE_TTL:
+        return _cache[url]['data']
+    r = requests.get(url, timeout=15)
+    r.raise_for_status()
+    reader = csv.DictReader(io.StringIO(r.text))
+    data = list(reader)
+    _cache[url] = {'data': data, 'ts': now}
+    return data
+
+# ── Black-76 (Python) ─────────────────────────────────────────────────────────
+
+def _ncdf(x):
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+def _npdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+def b76_price(F, K, T, r, sigma, is_call):
+    if T <= 0:
+        return max(0.0, (F - K) if is_call else (K - F))
+    try:
+        d1 = (math.log(F / K) + 0.5 * sigma * sigma * T) / (sigma * math.sqrt(T))
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    d2 = d1 - sigma * math.sqrt(T)
+    df = math.exp(-r * T)
+    if is_call:
+        return df * (F * _ncdf(d1) - K * _ncdf(d2))
+    return df * (K * _ncdf(-d2) - F * _ncdf(-d1))
+
+def b76_vega(F, K, T, r, sigma):
+    if T <= 0 or sigma <= 0:
+        return 0.0
+    try:
+        d1 = (math.log(F / K) + 0.5 * sigma * sigma * T) / (sigma * math.sqrt(T))
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    return math.exp(-r * T) * F * _npdf(d1) * math.sqrt(T)
+
+def b76_delta(F, K, T, r, sigma, is_call):
+    if T <= 0:
+        return (1.0 if F > K else 0.0) if is_call else (-1.0 if F < K else 0.0)
+    try:
+        d1 = (math.log(F / K) + 0.5 * sigma * sigma * T) / (sigma * math.sqrt(T))
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    df = math.exp(-r * T)
+    return df * _ncdf(d1) if is_call else -df * _ncdf(-d1)
+
+def implied_vol(mkt_price, F, K, T, r, is_call):
+    if T <= 0 or not mkt_price or mkt_price <= 0:
+        return None
+    if F <= 0 or K <= 0:
+        return None
+    intrinsic = max(0.0, (F - K) if is_call else (K - F))
+    if mkt_price <= intrinsic * 0.999:
+        return None
+    sigma = 0.20
+    for _ in range(100):
+        price = b76_price(F, K, T, r, sigma, is_call)
+        vega  = b76_vega(F, K, T, r, sigma)
+        if vega < 1e-10:
+            break
+        diff = price - mkt_price
+        if abs(diff) < 1e-8:
+            break
+        sigma -= diff / vega
+        sigma = max(0.001, min(sigma, 5.0))
+    if abs(b76_price(F, K, T, r, sigma, is_call) - mkt_price) > 0.05:
+        return None
+    if sigma > 1.50 or sigma < 0.01:
+        return None
+    return sigma
+
+# ── Ticker parsing ────────────────────────────────────────────────────────────
+
+def parse_security_des(sec_des):
+    try:
+        return sec_des.strip().split()[0]
+    except Exception:
+        return None
+
+def parse_ct_ticker(ticker):
+    if not ticker or len(ticker) < 4 or not ticker.startswith('CT'):
+        return None
+    code = ticker[2]
+    if code not in MONTH_CODE:
+        return None
+    try:
+        year_digit = int(ticker[3])
+    except ValueError:
+        return None
+    return code, 2020 + year_digit, MONTH_CODE[code]
+
+def ticker_label(ticker):
+    p = parse_ct_ticker(ticker)
+    if not p:
+        return ticker
+    _, year, month_num = p
+    return f"{MONTH_NAME[month_num]} {str(year)[-2:]}"
+
+# ── Core data load ────────────────────────────────────────────────────────────
+
+def load_data():
+    try:
+        opt_rows = fetch_csv(OPT_CSV_URL)
+        oi_rows  = fetch_csv(OI_CSV_URL)
+    except Exception as e:
+        return {'error': str(e)}
+
+    ct_opts = [r for r in opt_rows
+               if r.get('commodity', '').strip().upper() == 'CT'
+               and r.get('security_des')]
+    ct_fut  = [r for r in oi_rows
+               if r.get('commodity', '').strip().upper() == 'CT']
+
+    if not ct_opts:
+        return {'error': 'No CT options data found'}
+
+    # Dates
+    all_dates = sorted(set(r['date'].strip() for r in ct_opts if r.get('date')))
+    last_date = all_dates[-1]
+    prev_date = all_dates[-2] if len(all_dates) >= 2 else last_date
+    last_dt   = datetime.strptime(last_date, '%Y-%m-%d')
+    week_target = last_dt - timedelta(days=7)
+    week_date = max(
+        (d for d in all_dates if datetime.strptime(d, '%Y-%m-%d') <= week_target),
+        default=prev_date
+    )
+
+    # Futures lookup: (month_num, year) -> {settle, last_trade}
+    # Use most-recent row per contract to handle multi-date CSVs
+    fut_lookup = {}
+    for row in ct_fut:
+        lt_str  = (row.get('last_trade') or '').strip()
+        settle  = (row.get('settle')     or '').strip()
+        date_s  = (row.get('date')       or '').strip()
+        if not lt_str or not settle or not date_s:
+            continue
+        try:
+            lt_dt = datetime.strptime(lt_str, '%Y-%m-%d')
+            key   = (lt_dt.month, lt_dt.year)
+            if key not in fut_lookup or date_s > fut_lookup[key]['date']:
+                fut_lookup[key] = {
+                    'settle':     float(settle),
+                    'last_trade': lt_str,
+                    'date':       date_s,
+                }
+        except (ValueError, TypeError):
+            continue
+
+    # Active expiries from today's options
+    today_opts = [r for r in ct_opts if r.get('date', '').strip() == last_date]
+    seen = {}
+    for row in today_opts:
+        ticker = parse_security_des(row.get('security_des', ''))
+        if not ticker or ticker in seen:
+            continue
+        p = parse_ct_ticker(ticker)
+        if p:
+            seen[ticker] = p
+
+    expiry_list = sorted(seen.keys(), key=lambda t: (seen[t][1], seen[t][2]))
+
+    expiry_labels = {}
+    futures       = {}
+    last_trade    = {}
+
+    for ticker in expiry_list:
+        _, year, month_num = seen[ticker]
+        expiry_labels[ticker] = ticker_label(ticker)
+        key = (month_num, year)
+        if key in fut_lookup:
+            futures[ticker]    = fut_lookup[key]['settle']
+            last_trade[ticker] = fut_lookup[key]['last_trade']
+
+    # ATM strike
+    atm_strike = {}
+    for ticker in expiry_list:
+        fwd = futures.get(ticker)
+        if fwd is None:
+            continue
+        strikes = set()
+        for row in today_opts:
+            t = parse_security_des(row.get('security_des', ''))
+            if t == ticker:
+                try:
+                    strikes.add(float(row['strike_px']))
+                except (ValueError, TypeError):
+                    pass
+        if strikes:
+            atm_strike[ticker] = min(strikes, key=lambda k: abs(k - fwd))
+
+    # ── Helper: compute IV for a single option row ────────────────────────────
+    def row_iv(row, fwd, lt_str, ref_date):
+        try:
+            k   = float(row['strike_px'])
+            mkt = float(row['px_settle'])
+            pc  = row.get('put_call', '').strip()
+            if mkt <= 0 or pc not in ('Call', 'Put'):
+                return None
+            dte = (datetime.strptime(lt_str, '%Y-%m-%d') -
+                   datetime.strptime(ref_date, '%Y-%m-%d')).days
+            if dte <= 0:
+                return None
+            is_call = (pc == 'Call')
+            return implied_vol(mkt, fwd, k, dte / 365.0, RISK_FREE, is_call)
+        except (ValueError, TypeError, KeyError):
+            return None
+
+    # ── ATM IV for today, prev, week ─────────────────────────────────────────
+    def atm_iv_for_date(ticker, date_str):
+        fwd  = futures.get(ticker)
+        atm  = atm_strike.get(ticker)
+        lt   = last_trade.get(ticker)
+        if fwd is None or atm is None or not lt:
+            return None
+        rows = [r for r in ct_opts
+                if r.get('date', '').strip() == date_str
+                and parse_security_des(r.get('security_des', '')) == ticker
+                and abs(float(r.get('strike_px', 0) or 0) - atm) < 0.01]
+        for pc_pref in ('Call', 'Put'):
+            for row in rows:
+                if row.get('put_call', '').strip() == pc_pref:
+                    iv = row_iv(row, fwd, lt, date_str)
+                    if iv is not None:
+                        return iv
+        return None
+
+    atm_iv        = {}
+    atm_iv_1d_chg = {}
+    atm_iv_1w_chg = {}
+
+    for ticker in expiry_list:
+        iv_t = atm_iv_for_date(ticker, last_date)
+        if iv_t is None:
+            continue
+        atm_iv[ticker] = round(iv_t * 100, 2)
+        iv_p = atm_iv_for_date(ticker, prev_date)
+        if iv_p is not None:
+            atm_iv_1d_chg[ticker] = round((iv_t - iv_p) * 100, 2)
+        iv_w = atm_iv_for_date(ticker, week_date)
+        if iv_w is not None:
+            atm_iv_1w_chg[ticker] = round((iv_t - iv_w) * 100, 2)
+
+    # ── IV Percentile ─────────────────────────────────────────────────────────
+    iv_percentile  = {}
+    history_months = {}
+
+    for ticker in expiry_list:
+        atm = atm_strike.get(ticker)
+        fwd = futures.get(ticker)
+        lt  = last_trade.get(ticker)
+        iv_today_pct = atm_iv.get(ticker)
+        if atm is None or fwd is None or not lt or iv_today_pct is None:
+            continue
+
+        date_ivs = {}
+        for row in ct_opts:
+            d  = row.get('date', '').strip()
+            t  = parse_security_des(row.get('security_des', ''))
+            pc = row.get('put_call', '').strip()
+            if t != ticker or pc not in ('Call', 'Put') or d in date_ivs:
+                continue
+            try:
+                if abs(float(row['strike_px']) - atm) > 0.01:
+                    continue
+                iv = row_iv(row, fwd, lt, d)
+                if iv is not None:
+                    date_ivs[d] = iv * 100
+            except (ValueError, TypeError):
+                continue
+
+        if len(date_ivs) < 2:
+            continue
+
+        iv_vals = sorted(date_ivs.values())
+        rank = sum(1 for v in iv_vals if v <= iv_today_pct)
+        iv_percentile[ticker] = round(rank / len(iv_vals) * 100)
+
+        sorted_dates = sorted(date_ivs.keys())
+        d0 = datetime.strptime(sorted_dates[0],  '%Y-%m-%d')
+        d1 = datetime.strptime(sorted_dates[-1], '%Y-%m-%d')
+        history_months[ticker] = max(1, (d1.year - d0.year) * 12 + (d1.month - d0.month))
+
+    # ── Skew + C/P ratio ──────────────────────────────────────────────────────
+    skew_direction = {}
+    skew_value     = {}
+    cp_ratio       = {}
+    call_oi_total  = {}
+    put_oi_total   = {}
+
+    for ticker in expiry_list:
+        fwd = futures.get(ticker)
+        lt  = last_trade.get(ticker)
+        if fwd is None or not lt:
+            continue
+        try:
+            dte = (datetime.strptime(lt, '%Y-%m-%d') -
+                   datetime.strptime(last_date, '%Y-%m-%d')).days
+        except ValueError:
+            continue
+        if dte <= 0:
+            continue
+        T = dte / 365.0
+
+        c_oi = 0
+        p_oi = 0
+        strikes_data = []
+
+        for row in today_opts:
+            t = parse_security_des(row.get('security_des', ''))
+            if t != ticker:
+                continue
+            try:
+                k   = float(row['strike_px'])
+                pc  = row.get('put_call', '').strip()
+                mkt = float(row.get('px_settle', 0) or 0)
+                oi  = int(row.get('open_int', 0) or 0)
+                if pc == 'Call':
+                    c_oi += oi
+                elif pc == 'Put':
+                    p_oi += oi
+                if mkt <= 0 or pc not in ('Call', 'Put'):
+                    continue
+                is_call = (pc == 'Call')
+                iv = implied_vol(mkt, fwd, k, T, RISK_FREE, is_call)
+                if iv is None:
+                    continue
+                delta_val = b76_delta(fwd, k, T, RISK_FREE, iv, is_call)
+                strikes_data.append({'k': k, 'pc': pc, 'iv': iv, 'delta': delta_val})
+            except (ValueError, TypeError):
+                continue
+
+        call_oi_total[ticker] = c_oi
+        put_oi_total[ticker]  = p_oi
+        cp_ratio[ticker] = round(c_oi / p_oi, 2) if p_oi > 0 else None
+
+        calls_25 = [s for s in strikes_data if s['pc'] == 'Call' and 0.10 <= s['delta'] <= 0.50]
+        puts_25  = [s for s in strikes_data if s['pc'] == 'Put'  and -0.50 <= s['delta'] <= -0.10]
+
+        call_iv = min(calls_25, key=lambda s: abs(s['delta'] - 0.25))['iv'] * 100 if calls_25 else None
+        put_iv  = min(puts_25,  key=lambda s: abs(s['delta'] + 0.25))['iv'] * 100 if puts_25  else None
+
+        if call_iv is not None and put_iv is not None:
+            diff = put_iv - call_iv
+            skew_value[ticker] = round(diff, 2)
+            if diff > 0.5:
+                skew_direction[ticker] = 'PUTS BID'
+            elif diff < -0.5:
+                skew_direction[ticker] = 'CALLS BID'
+            else:
+                skew_direction[ticker] = 'NEUTRAL'
+        else:
+            skew_direction[ticker] = 'NEUTRAL'
+            skew_value[ticker]     = 0.0
+
+    # ── Serialize options rows for client ─────────────────────────────────────
+    def serialize_opts(rows):
+        out = []
+        for r in rows:
+            try:
+                out.append({
+                    'ticker':   parse_security_des(r.get('security_des', '')),
+                    'put_call': r.get('put_call', '').strip(),
+                    'strike':   float(r.get('strike_px', 0) or 0),
+                    'oi':       int(r.get('open_int', 0) or 0),
+                    'oi_chg':   int(r.get('oi_chg', 0) or 0),
+                    'px':       float(r.get('px_settle', 0) or 0),
+                    'vol':      float(r.get('px_volume', 0) or 0),
+                })
+            except (ValueError, TypeError):
+                continue
+        return out
+
+    prev_opts = [r for r in ct_opts if r.get('date', '').strip() == prev_date]
+    week_opts = [r for r in ct_opts if r.get('date', '').strip() == week_date]
+
+    return {
+        'last_date':      last_date,
+        'prev_date':      prev_date,
+        'week_date':      week_date,
+        'expiries':       expiry_list,
+        'expiry_labels':  expiry_labels,
+        'futures':        futures,
+        'last_trade':     last_trade,
+        'atm_strike':     atm_strike,
+        'atm_iv':         atm_iv,
+        'atm_iv_1d_chg':  atm_iv_1d_chg,
+        'atm_iv_1w_chg':  atm_iv_1w_chg,
+        'iv_percentile':  iv_percentile,
+        'history_months': history_months,
+        'skew_direction': skew_direction,
+        'skew_value':     skew_value,
+        'cp_ratio':       cp_ratio,
+        'call_oi':        call_oi_total,
+        'put_oi':         put_oi_total,
+        'options_today':  serialize_opts(today_opts),
+        'options_prev':   serialize_opts(prev_opts),
+        'options_week':   serialize_opts(week_opts),
+    }
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@server.route('/')
+def index():
+    data = load_data()
+    return render_template('index.html', data=data)
+
+@server.route('/api/data')
+def api_data():
+    return jsonify(load_data())
+
+if __name__ == '__main__':
+    server.run(debug=True, port=5050)

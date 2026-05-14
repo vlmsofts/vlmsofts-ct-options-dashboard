@@ -1,0 +1,1658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CT Options Analytics — VLM Commodities</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+:root {
+  --bg:    #0b0f1a;
+  --surf:  #111827;
+  --surf2: #1a2235;
+  --hdr:   #0d1321;
+  --bord:  #1e2a3a;
+  --bord2: #2a3548;
+  --text:  #f8fafc;
+  --dim:   #94a3b8;
+  --muted: #4a6080;
+  --acc:   #E8C547;
+  --grn:   #22c55e;
+  --red:   #ef4444;
+  --blue:  #3b82f6;
+  --font:  'Aptos','Nunito','Segoe UI',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh}
+a{color:var(--acc)}
+
+/* ── Topbar ── */
+#topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  background:var(--hdr);border-bottom:1px solid var(--bord);
+  padding:0 16px;height:44px;position:sticky;top:0;z-index:100;
+}
+#topbar .brand{font-size:13px;font-weight:600;color:var(--acc);letter-spacing:.04em}
+#topbar .brand span{color:var(--dim);font-weight:400;margin-left:8px}
+#topbar .right{display:flex;gap:8px;align-items:center}
+.btn-export{
+  background:var(--acc);color:#000;border:none;padding:5px 12px;
+  border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.03em;
+}
+.btn-export:hover{opacity:.85}
+#data-date{color:var(--dim);font-size:11px}
+
+/* ── Intelligence header strip ── */
+#intel-strip{
+  display:flex;gap:1px;background:var(--bord);border-bottom:1px solid var(--bord);
+}
+.intel-tile{
+  flex:1;background:var(--surf);padding:10px 14px;min-width:0;
+}
+.intel-tile .label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.intel-tile .big{font-size:22px;font-weight:700;line-height:1;color:var(--text)}
+.intel-tile .sub{font-size:11px;color:var(--dim);margin-top:3px}
+.intel-tile select{
+  background:var(--surf2);border:1px solid var(--bord2);color:var(--text);
+  padding:2px 6px;border-radius:3px;font-size:11px;margin-top:4px;
+}
+/* Percentile bar */
+.pct-bar-wrap{margin-top:6px;position:relative}
+.pct-bar-track{background:var(--bord2);height:5px;border-radius:3px;position:relative}
+.pct-bar-fill{height:5px;border-radius:3px;transition:width .3s}
+.pct-bar-marker{
+  position:absolute;top:-3px;width:2px;height:11px;background:#fff;border-radius:1px;
+  transform:translateX(-50%);
+}
+.pct-labels{display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px}
+.clr-cheap{color:var(--grn)} .clr-fair{color:var(--acc)} .clr-expensive{color:var(--red)}
+
+/* ── Tabs ── */
+#tabs{
+  display:flex;gap:0;background:var(--hdr);border-bottom:1px solid var(--bord);padding:0 12px;
+}
+.tab{
+  padding:8px 16px;font-size:12px;font-weight:500;color:var(--dim);
+  cursor:pointer;border-bottom:2px solid transparent;letter-spacing:.02em;
+}
+.tab.active{color:var(--acc);border-bottom-color:var(--acc)}
+.tab:hover:not(.active){color:var(--text)}
+
+/* ── Panel ── */
+.panel{display:none;padding:16px}
+.panel.active{display:block}
+
+/* ── Cards ── */
+.card{background:var(--surf);border:1px solid var(--bord);border-radius:6px;padding:14px}
+.card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+
+/* ── Controls bar ── */
+.ctrl-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.ctrl-bar select,.ctrl-bar input{
+  background:var(--surf2);border:1px solid var(--bord2);color:var(--text);
+  padding:4px 8px;border-radius:4px;font-size:12px;
+}
+.pill-grp{display:flex;gap:2px}
+.pill{
+  padding:4px 10px;border-radius:12px;font-size:11px;font-weight:500;
+  cursor:pointer;border:1px solid var(--bord2);background:var(--surf2);color:var(--dim);
+}
+.pill.active{background:var(--acc);color:#000;border-color:var(--acc)}
+.pill:hover:not(.active){color:var(--text)}
+
+/* ── Tables ── */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:5px 8px;color:var(--muted);font-size:10px;text-transform:uppercase;
+   letter-spacing:.05em;border-bottom:1px solid var(--bord);white-space:nowrap}
+td{padding:5px 8px;border-bottom:1px solid var(--bord);vertical-align:middle}
+tr:hover td{background:var(--surf2)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.pos{color:var(--grn)} .neg{color:var(--red)}
+
+/* ── Trade Analyzer layout ── */
+#panel-trade{padding:12px}
+.trade-layout{display:grid;grid-template-columns:1fr 420px;gap:12px}
+.trade-left,.trade-right{display:flex;flex-direction:column;gap:10px}
+
+/* Template selector */
+.tmpl-cats{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.tmpl-sub{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+
+/* Leg table */
+#leg-table{width:100%;border-collapse:collapse;font-size:12px}
+#leg-table th{
+  background:var(--hdr);padding:5px 6px;text-align:left;
+  color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;
+  border-bottom:1px solid var(--bord);
+}
+#leg-table td{padding:4px 4px;border-bottom:1px solid var(--bord);vertical-align:middle}
+.toggle-btn{
+  padding:2px 7px;border-radius:3px;border:1px solid var(--bord2);
+  background:var(--surf2);color:var(--dim);cursor:pointer;font-size:11px;
+}
+.toggle-btn.active-call{background:#1e3a2a;border-color:var(--grn);color:var(--grn)}
+.toggle-btn.active-put{background:#3a1e1e;border-color:var(--red);color:var(--red)}
+.toggle-btn.active-long{background:#1e2e3a;border-color:var(--blue);color:var(--blue)}
+.toggle-btn.active-short{background:#3a1e1e;border-color:var(--red);color:var(--red)}
+.leg-input{
+  background:var(--surf2);border:1px solid var(--bord2);color:var(--text);
+  padding:3px 5px;border-radius:3px;font-size:11px;width:70px;
+}
+.leg-input.wide{width:90px}
+.otmf-badge{font-size:10px;color:var(--muted);white-space:nowrap}
+.btn-del{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 4px}
+.btn-del:hover{color:var(--red)}
+.btn-add{
+  background:var(--surf2);border:1px solid var(--bord2);color:var(--dim);
+  padding:5px 12px;border-radius:4px;font-size:12px;cursor:pointer;margin-top:6px;
+}
+.btn-add:hover{color:var(--text);border-color:var(--bord)}
+
+/* Greeks display */
+.greek-summary{
+  background:var(--surf2);border:1px solid var(--bord2);border-radius:5px;padding:12px;
+}
+.greek-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.greek-sym{font-size:15px;font-weight:700;color:var(--acc);min-width:28px}
+.greek-val{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.greek-sub{font-size:10px;color:var(--dim);text-align:right}
+.btn-neutral{
+  background:var(--surf2);border:1px solid var(--acc);color:var(--acc);
+  padding:5px 10px;border-radius:4px;font-size:11px;cursor:pointer;margin-top:8px;width:100%;
+}
+.btn-neutral:hover{background:var(--acc);color:#000}
+
+/* Scenario grid */
+#scenario-wrap{margin-top:12px}
+.scenario-grid{border-collapse:collapse;font-size:11px;width:100%}
+.scenario-grid th{
+  background:var(--hdr);padding:5px 8px;text-align:center;
+  color:var(--muted);font-size:10px;border:1px solid var(--bord);
+}
+.scenario-grid td{
+  padding:6px 8px;text-align:center;border:1px solid var(--bord);
+  font-variant-numeric:tabular-nums;font-size:11px;font-weight:500;
+}
+.scenario-grid .row-label{background:var(--hdr);color:var(--dim);font-weight:600;text-align:right}
+.cell-highlight{outline:2px solid var(--acc)!important;outline-offset:-2px;z-index:1;position:relative}
+.scenario-stats{display:flex;gap:20px;margin-top:8px;font-size:11px;color:var(--dim)}
+.scenario-stats span{color:var(--text)}
+
+/* Time decay slider */
+.dte-slider-wrap{margin-top:8px}
+.dte-slider-wrap input[type=range]{
+  width:100%;accent-color:var(--acc);height:4px;
+}
+.dte-labels{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:3px}
+
+/* Per-leg greeks table */
+#leg-greeks-table td,#leg-greeks-table th{font-size:11px;padding:4px 6px}
+#leg-greeks-table tr:last-child td{border-top:1px solid var(--bord2);font-weight:600;color:var(--acc)}
+
+/* Vol surface panel */
+.surf-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.surf-table td,.surf-table th{font-size:11px;padding:4px 8px;text-align:center}
+.surf-table th{background:var(--hdr)}
+
+/* Export modal */
+#export-modal{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;
+  align-items:center;justify-content:center;
+}
+#export-modal.open{display:flex}
+.modal-box{
+  background:var(--surf);border:1px solid var(--bord2);border-radius:8px;
+  padding:20px;width:420px;max-width:95vw;
+}
+.modal-title{font-size:14px;font-weight:600;margin-bottom:14px;color:var(--acc)}
+.modal-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.modal-row label{font-size:12px;color:var(--dim)}
+.modal-row input[type=text]{
+  background:var(--surf2);border:1px solid var(--bord2);color:var(--text);
+  padding:4px 8px;border-radius:3px;font-size:12px;flex:1;margin-left:12px;
+}
+.modal-close{float:right;background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer}
+.btn-gen{
+  background:var(--acc);color:#000;border:none;padding:8px 20px;border-radius:4px;
+  font-size:13px;font-weight:700;cursor:pointer;width:100%;margin-top:6px;
+}
+.btn-gen:hover{opacity:.85}
+
+/* hidden export canvas */
+#export-stage{
+  position:fixed;left:-9999px;top:0;width:1200px;
+  background:#fff;color:#000;padding:20px;font-family:var(--font);
+}
+
+/* Misc */
+.flex-gap{display:flex;gap:8px;align-items:center}
+.divider{border:none;border-top:1px solid var(--bord);margin:10px 0}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--bord2);
+  border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.error-box{background:#2a1010;border:1px solid var(--red);border-radius:5px;padding:12px;color:var(--red)}
+</style>
+</head>
+<body>
+
+<!-- ── Top bar ── -->
+<div id="topbar">
+  <div class="brand">VLM COMMODITIES <span>CT Options Analytics</span></div>
+  <div class="right">
+    <span id="data-date"></span>
+    <button class="btn-export" onclick="openExport()">&#x1F4F7; EXPORT SNAPSHOT</button>
+  </div>
+</div>
+
+<!-- ── Daily Intelligence Strip ── -->
+<div id="intel-strip">
+  <!-- ATM IV -->
+  <div class="intel-tile">
+    <div class="label">ATM Implied Vol
+      <select id="hdr-expiry" onchange="updateHeader()"></select>
+    </div>
+    <div class="big" id="hdr-iv">—</div>
+    <div class="sub" id="hdr-iv-label">Select expiry</div>
+  </div>
+  <!-- IV Change -->
+  <div class="intel-tile">
+    <div class="label">IV Change</div>
+    <div class="big" id="hdr-1d" style="font-size:14px">—</div>
+    <div class="sub" id="hdr-1w">—</div>
+  </div>
+  <!-- IV Percentile -->
+  <div class="intel-tile">
+    <div class="label">IV Percentile</div>
+    <div class="big" id="hdr-pct">—</div>
+    <div class="pct-bar-wrap">
+      <div class="pct-bar-track">
+        <div class="pct-bar-fill" id="pct-bar-fill" style="width:0%"></div>
+        <div class="pct-bar-marker" id="pct-bar-marker" style="left:0%"></div>
+      </div>
+      <div class="pct-labels"><span id="pct-lo">5yr Lo</span><span id="pct-hi">5yr Hi</span></div>
+    </div>
+  </div>
+  <!-- Skew -->
+  <div class="intel-tile">
+    <div class="label">Skew (25Δ)</div>
+    <div class="big" id="hdr-skew" style="font-size:16px">—</div>
+    <div class="sub" id="hdr-skew-sub">—</div>
+  </div>
+  <!-- C/P Ratio -->
+  <div class="intel-tile">
+    <div class="label">C/P OI Ratio</div>
+    <div class="big" id="hdr-cp" style="font-size:18px">—</div>
+    <div class="sub" id="hdr-cp-sub">—</div>
+  </div>
+</div>
+
+<!-- ── Navigation tabs ── -->
+<div id="tabs">
+  <div class="tab active" onclick="switchTab('smile')">Vol Smile</div>
+  <div class="tab" onclick="switchTab('trade')">Trade Analyzer</div>
+  <div class="tab" onclick="switchTab('surface')">Vol Surface</div>
+</div>
+
+<!-- ══════════════════════════ PANEL: VOL SMILE ══════════════════════════ -->
+<div id="panel-smile" class="panel active">
+  <div class="ctrl-bar">
+    <select id="smile-expiry" onchange="renderSmile()"></select>
+    <div class="pill-grp" id="smile-overlay-pills">
+      <div class="pill active" data-ov="today" onclick="toggleOverlay(this)">TODAY</div>
+      <div class="pill" data-ov="prev"  onclick="toggleOverlay(this)">+ YESTERDAY</div>
+      <div class="pill" data-ov="week"  onclick="toggleOverlay(this)">+ LAST WEEK</div>
+    </div>
+    <div class="pill-grp" id="smile-type-pills">
+      <div class="pill active" data-ct="smile" onclick="setChartType(this,'smile')">SMILE</div>
+      <div class="pill"        data-ct="chg"   onclick="setChartType(this,'chg')">IV CHANGE</div>
+    </div>
+  </div>
+  <div class="card" style="padding:10px">
+    <canvas id="smile-chart" height="260"></canvas>
+  </div>
+  <div class="card" style="margin-top:10px">
+    <div class="card-title">Top 5 Strikes by IV Change</div>
+    <table id="smile-chg-table">
+      <thead><tr>
+        <th>Strike</th><th class="num">Call IV Chg</th><th class="num">Put IV Chg</th>
+        <th class="num">Call OI Chg</th><th class="num">Put OI Chg</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════ PANEL: TRADE ANALYZER ══════════════════════════ -->
+<div id="panel-trade" class="panel">
+  <div class="trade-layout">
+    <!-- LEFT: Trade Builder -->
+    <div class="trade-left">
+      <div class="card">
+        <div class="card-title">Trade Builder</div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--dim)">Client Reference:</label>
+          <input id="client-ref" type="text" placeholder="Optional — printed on PNG"
+            style="background:var(--surf2);border:1px solid var(--bord2);color:var(--text);
+                   padding:3px 8px;border-radius:3px;font-size:12px;width:200px;margin-left:8px">
+        </div>
+        <div class="tmpl-cats" id="tmpl-cats"></div>
+        <div class="tmpl-sub" id="tmpl-sub"></div>
+        <hr class="divider">
+        <div style="overflow-x:auto">
+          <table id="leg-table">
+            <thead><tr>
+              <th>#</th><th>Type</th><th>Expiry</th><th>Strike</th>
+              <th>C/P</th><th>L/S</th><th>Lots</th><th>Entry Px</th><th>OTMF</th><th></th>
+            </tr></thead>
+            <tbody id="leg-tbody"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn-add" onclick="addLeg('option')">+ Option Leg</button>
+          <button class="btn-add" onclick="addLeg('futures')">+ Futures Leg</button>
+        </div>
+        <!-- Advanced: forward overrides -->
+        <details style="margin-top:10px">
+          <summary style="font-size:11px;color:var(--muted);cursor:pointer">Advanced — Forward Overrides</summary>
+          <div id="fwd-overrides" style="margin-top:8px;display:flex;flex-direction:column;gap:5px"></div>
+          <div style="margin-top:6px;font-size:11px;color:var(--dim)">
+            Risk-free rate: <input id="rfr-input" type="number" value="4.50" step="0.05" min="0" max="20"
+              style="width:60px;background:var(--surf2);border:1px solid var(--bord2);
+                     color:var(--text);padding:2px 5px;border-radius:3px;font-size:11px"
+              onchange="recomputeAll()">%
+          </div>
+        </details>
+      </div>
+
+      <!-- Scenario Grid -->
+      <div class="card" id="scenario-wrap">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div class="card-title" style="margin:0">Scenario P&amp;L (¢/lb)</div>
+          <div class="pill-grp">
+            <div class="pill active" id="scen-today-btn" onclick="setScenMode('today',this)">TODAY</div>
+            <div class="pill"        id="scen-exp-btn"   onclick="setScenMode('expiry',this)">AT EXPIRY</div>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="scenario-grid" id="scen-grid"></table>
+        </div>
+        <div class="scenario-stats" id="scen-stats"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Greeks -->
+    <div class="trade-right">
+      <div class="card">
+        <div class="card-title">Net Position Greeks</div>
+        <div class="greek-summary" id="greek-summary">
+          <div style="color:var(--muted);font-size:11px">Add legs to see Greeks</div>
+        </div>
+        <button class="btn-neutral" onclick="openNeutral()">Δ NEUTRALISE</button>
+        <div id="neutral-panel" style="display:none;margin-top:8px;background:var(--hdr);
+          border:1px solid var(--bord);border-radius:4px;padding:10px;font-size:12px">
+          <div style="margin-bottom:6px;color:var(--dim)">Target Δ:
+            <input id="target-delta" type="number" value="0" step="0.01"
+              style="width:60px;background:var(--surf2);border:1px solid var(--bord2);
+                     color:var(--text);padding:2px 5px;border-radius:3px;font-size:11px;margin-left:6px">
+          </div>
+          <div id="neutral-result" style="color:var(--dim)">—</div>
+          <button class="btn-add" style="margin-top:6px" onclick="addNeutralHedge()">Add as Leg</button>
+        </div>
+      </div>
+
+      <!-- Time decay slider -->
+      <div class="card">
+        <div class="card-title">Time Decay — DTE</div>
+        <div class="dte-slider-wrap">
+          <input type="range" id="dte-slider" min="0" max="365" value="0"
+            oninput="onDteSlide(this.value)">
+          <div class="dte-labels">
+            <span id="dte-label-today">Today</span>
+            <span id="dte-label-dte" style="color:var(--acc)">DTE: —</span>
+            <span id="dte-label-exp">Expiry</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Per-leg Greeks table -->
+      <div class="card">
+        <div class="card-title">Per-Leg Greeks</div>
+        <div style="overflow-x:auto">
+          <table id="leg-greeks-table">
+            <thead><tr>
+              <th>#</th><th>Description</th>
+              <th class="num">Δ</th><th class="num">Γ</th>
+              <th class="num">Θ/day</th><th class="num">Vega/pt</th><th class="num">IV</th>
+            </tr></thead>
+            <tbody id="greeks-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ PANEL: VOL SURFACE ══════════════════════════ -->
+<div id="panel-surface" class="panel">
+  <div id="surface-loading" style="color:var(--dim);padding:20px">Loading surface data…</div>
+  <div id="surface-content" style="display:none">
+    <div class="surf-grid">
+      <div class="card">
+        <div class="card-title">Vol Surface — Today</div>
+        <div style="overflow-x:auto">
+          <table class="surf-table" id="surf-table">
+            <thead><tr>
+              <th>Expiry</th><th>10Δ Put</th><th>25Δ Put</th><th>ATM</th><th>25Δ Call</th><th>10Δ Call</th>
+            </tr></thead>
+            <tbody id="surf-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">ATM IV History</div>
+        <canvas id="surf-chart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <div class="card-title">25Δ Skew History (Put IV − Call IV)</div>
+      <canvas id="skew-chart" height="160"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ EXPORT MODAL ══════════════════════════ -->
+<div id="export-modal">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeExport()">&#x2715;</button>
+    <div class="modal-title">Export PNG Snapshot</div>
+    <div class="modal-row">
+      <label>Client Reference</label>
+      <input type="text" id="exp-client" placeholder="Name / ref">
+    </div>
+    <div class="modal-row">
+      <label>Expiry</label>
+      <select id="exp-expiry" style="background:var(--surf2);border:1px solid var(--bord2);
+        color:var(--text);padding:4px 8px;border-radius:3px;font-size:12px;margin-left:12px;flex:1"></select>
+    </div>
+    <div class="modal-row">
+      <label>Overlay</label>
+      <div class="pill-grp" style="margin-left:12px">
+        <div class="pill active" id="exp-ov-today" onclick="setExpOv('today',this)">TODAY</div>
+        <div class="pill" id="exp-ov-dod" onclick="setExpOv('dod',this)">+DOD</div>
+        <div class="pill" id="exp-ov-wow" onclick="setExpOv('wow',this)">+WOW</div>
+      </div>
+    </div>
+    <button class="btn-gen" onclick="generatePng()">GENERATE PNG</button>
+  </div>
+</div>
+
+<!-- Hidden export stage -->
+<div id="export-stage"></div>
+
+<!-- ══════════════════════════ JAVASCRIPT ══════════════════════════ -->
+<script>
+// ── Data injected by Flask ────────────────────────────────────────────────────
+const D = {{ data | tojson }};
+
+// ── Black-76 ──────────────────────────────────────────────────────────────────
+const Black76 = {
+  normCDF(x){
+    const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+    const sign=x<0?-1:1; x=Math.abs(x)/Math.sqrt(2);
+    const t=1/(1+p*x);
+    const y=1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+    return 0.5*(1+sign*y);
+  },
+  normPDF(x){return Math.exp(-0.5*x*x)/Math.sqrt(2*Math.PI)},
+  d1d2(F,K,T,sigma){
+    const d1=(Math.log(F/K)+0.5*sigma*sigma*T)/(sigma*Math.sqrt(T));
+    return {d1, d2:d1-sigma*Math.sqrt(T)};
+  },
+  price(F,K,T,r,sigma,isCall){
+    if(T<=0) return Math.max(0,isCall?F-K:K-F);
+    const {d1,d2}=this.d1d2(F,K,T,sigma), df=Math.exp(-r*T);
+    return isCall ? df*(F*this.normCDF(d1)-K*this.normCDF(d2))
+                  : df*(K*this.normCDF(-d2)-F*this.normCDF(-d1));
+  },
+  impliedVol(mkt,F,K,T,r,isCall){
+    if(T<=0||mkt<=0) return null;
+    const intr=Math.max(0,isCall?F-K:K-F);
+    if(mkt<=intr*0.999) return null;
+    let sigma=0.20;
+    for(let i=0;i<100;i++){
+      const p=this.price(F,K,T,r,sigma,isCall);
+      const v=this.vega(F,K,T,r,sigma);
+      if(v<1e-10) break;
+      const diff=p-mkt;
+      if(Math.abs(diff)<1e-8) break;
+      sigma-=diff/v;
+      if(sigma<=0.001) sigma=0.001;
+      if(sigma>5.0) sigma=5.0;
+    }
+    const check=Math.abs(this.price(F,K,T,r,sigma,isCall)-mkt);
+    if(check>0.05||sigma>1.5||sigma<0.01) return null;
+    return sigma;
+  },
+  delta(F,K,T,r,sigma,isCall){
+    if(T<=0) return isCall?(F>K?1:0):(F<K?-1:0);
+    const {d1}=this.d1d2(F,K,T,sigma),df=Math.exp(-r*T);
+    return isCall?df*this.normCDF(d1):-df*this.normCDF(-d1);
+  },
+  gamma(F,K,T,r,sigma){
+    if(T<=0) return 0;
+    const {d1}=this.d1d2(F,K,T,sigma),df=Math.exp(-r*T);
+    return df*this.normPDF(d1)/(F*sigma*Math.sqrt(T));
+  },
+  theta(F,K,T,r,sigma,isCall){
+    if(T<=0) return 0;
+    const {d1,d2}=this.d1d2(F,K,T,sigma),df=Math.exp(-r*T);
+    const t1=-(F*df*this.normPDF(d1)*sigma)/(2*Math.sqrt(T));
+    const t2=isCall?-r*df*(F*this.normCDF(d1)-K*this.normCDF(d2))
+                   :-r*df*(K*this.normCDF(-d2)-F*this.normCDF(-d1));
+    return (t1+t2)/365;
+  },
+  vega(F,K,T,r,sigma){
+    if(T<=0) return 0;
+    const {d1}=this.d1d2(F,K,T,sigma),df=Math.exp(-r*T);
+    return df*F*this.normPDF(d1)*Math.sqrt(T)/100;
+  },
+  greeks(F,K,T,r,sigma,isCall,lots,ls){
+    const sign=ls==='LONG'?1:-1,scale=sign*lots;
+    return {
+      iv:    sigma*100,
+      delta: this.delta(F,K,T,r,sigma,isCall)*scale,
+      gamma: this.gamma(F,K,T,r,sigma)*scale,
+      theta: this.theta(F,K,T,r,sigma,isCall)*scale,
+      vega:  this.vega(F,K,T,r,sigma)*scale,
+      price: this.price(F,K,T,r,sigma,isCall),
+    };
+  },
+  scenarioPnl(leg,dF,dVol,T_ov,r){
+    const {F,K,sigma,isCall,entryPx,lots,ls,isFutures}=leg;
+    const sign=ls==='LONG'?1:-1;
+    if(isFutures) return sign*lots*dF;
+    const newF=F+dF, newSig=Math.max(0.001,sigma+dVol/100);
+    return sign*lots*(this.price(newF,K,T_ov,r,newSig,isCall)-entryPx);
+  },
+};
+
+// ── App state ─────────────────────────────────────────────────────────────────
+let activeExpiry = D.expiries && D.expiries.length ? D.expiries[0] : null;
+let smileOverlays = {today:true, prev:false, week:false};
+let smileChartType = 'smile';
+let smileChart = null;
+let surfChart  = null;
+let skewChart  = null;
+let legs = [];
+let legIdCounter = 0;
+let scenMode = 'today';     // 'today' | 'expiry'
+let dteOverride = null;     // null = use real DTE
+let expOv = 'today';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const fmt1 = v => v == null ? '—' : v.toFixed(1);
+const fmt2 = v => v == null ? '—' : v.toFixed(2);
+const fmt4 = v => v == null ? '—' : v.toFixed(4);
+const fmtPct = v => v == null ? '—' : v.toFixed(1) + '%';
+const fmtSgn = v => v == null ? '—' : (v>=0?'+':'')+v.toFixed(2);
+
+function clr(v){ return v==null?'':v>0.005?'pos':v<-0.005?'neg':'' }
+function pnlColor(v){
+  if(v==null) return 'transparent';
+  if(v > 2)   return '#0d4a1e';
+  if(v > 0.5) return '#1a3a1a';
+  if(v > 0.1) return '#162a16';
+  if(v >-0.1) return 'transparent';
+  if(v >-0.5) return '#3a1616';
+  if(v >-2)   return '#4a1212';
+  return '#6a0a0a';
+}
+function pnlTxt(v){
+  if(v==null) return '—';
+  if(v > 0.1) return '+'+v.toFixed(2);
+  if(v <-0.1) return v.toFixed(2);
+  return v.toFixed(2);
+}
+function getRFR(){ return (parseFloat(document.getElementById('rfr-input').value)||4.50)/100 }
+function getFwd(ticker){ return D.futures[ticker] ?? null }
+function getDTE(ticker, refDate){
+  const lt = D.last_trade[ticker];
+  if(!lt) return 0;
+  const d0 = new Date(refDate||D.last_date), d1 = new Date(lt);
+  return Math.max(0, Math.round((d1-d0)/(1000*60*60*24)));
+}
+function getChainPx(ticker, strike, pc){
+  const rows = D.options_today.filter(r=>r.ticker===ticker&&r.put_call===pc
+    &&Math.abs(r.strike-strike)<0.01);
+  return rows.length ? rows[0].px : null;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+function init(){
+  if(D.error){ document.body.innerHTML=`<div class="error-box" style="margin:40px">${D.error}</div>`; return; }
+
+  // Data date
+  document.getElementById('data-date').textContent = 'Data: ' + D.last_date;
+
+  // Populate header expiry selector
+  const hdrSel = document.getElementById('hdr-expiry');
+  hdrSel.innerHTML = D.expiries.map(e=>`<option value="${e}">${e}</option>`).join('');
+  updateHeader();
+
+  // Smile expiry selector
+  const smileSel = document.getElementById('smile-expiry');
+  smileSel.innerHTML = D.expiries.map(e=>`<option value="${e}">${e} — ${D.expiry_labels[e]||''}</option>`).join('');
+  renderSmile();
+
+  // Export expiry selector
+  const expSel = document.getElementById('exp-expiry');
+  expSel.innerHTML = D.expiries.map(e=>`<option value="${e}">${e}</option>`).join('');
+
+  // Templates
+  buildTemplateUI();
+}
+
+// ── Header strip ──────────────────────────────────────────────────────────────
+function updateHeader(){
+  const e = document.getElementById('hdr-expiry').value;
+  activeExpiry = e;
+
+  // ATM IV
+  const iv = D.atm_iv[e];
+  const ivEl = document.getElementById('hdr-iv');
+  ivEl.textContent = iv!=null ? iv.toFixed(1)+'%' : '—';
+
+  // IV label
+  document.getElementById('hdr-iv-label').textContent = `ATM · ${e} · ${D.expiry_labels[e]||''}`;
+
+  // IV change
+  const d1 = D.atm_iv_1d_chg[e], d7 = D.atm_iv_1w_chg[e];
+  const d1El = document.getElementById('hdr-1d');
+  d1El.textContent = d1!=null ? `1D: ${fmtSgn(d1)} vol pts` : '1D: —';
+  d1El.className = 'big ' + (d1!=null? (d1>=0?'pos':'neg') : '');
+  d1El.style.fontSize='14px';
+  document.getElementById('hdr-1w').textContent = d7!=null ? `1W: ${fmtSgn(d7)} vol pts` : '1W: —';
+
+  // Percentile
+  const pct = D.iv_percentile[e];
+  const mo  = D.history_months[e];
+  const pctEl = document.getElementById('hdr-pct');
+  pctEl.textContent = pct!=null ? pct+'th %ile' : '—';
+  const hLabel = mo ? `(${mo}mo history)` : '';
+  pctEl.className = 'big ' + (pct==null?'': pct<30?'clr-cheap':pct<70?'clr-fair':'clr-expensive');
+
+  // Percentile bar
+  if(pct!=null){
+    document.getElementById('pct-bar-fill').style.width = pct+'%';
+    document.getElementById('pct-bar-fill').style.background =
+      pct<30 ? 'var(--grn)' : pct<70 ? 'var(--acc)' : 'var(--red)';
+    document.getElementById('pct-bar-marker').style.left = pct+'%';
+  }
+  document.getElementById('pct-lo').textContent = hLabel ? hLabel+' Lo' : '5yr Lo';
+
+  // Skew
+  const skDir = D.skew_direction[e];
+  const skVal = D.skew_value[e];
+  const skEl  = document.getElementById('hdr-skew');
+  skEl.textContent = skDir || '—';
+  skEl.className = 'big ' + (skDir==='PUTS BID'?'neg': skDir==='CALLS BID'?'pos':'clr-fair');
+  skEl.style.fontSize='16px';
+  document.getElementById('hdr-skew-sub').textContent =
+    skVal!=null ? `25Δ: Put − Call = ${fmtSgn(skVal)} vol pts` : '—';
+
+  // C/P ratio
+  const cp  = D.cp_ratio[e];
+  const coi = D.call_oi[e], poi = D.put_oi[e];
+  document.getElementById('hdr-cp').textContent = cp!=null ? cp.toFixed(2) : '—';
+  document.getElementById('hdr-cp-sub').textContent =
+    coi!=null ? `Calls: ${coi.toLocaleString()} · Puts: ${poi.toLocaleString()}` : '—';
+}
+
+// ── Tab navigation ────────────────────────────────────────────────────────────
+function switchTab(name){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  event.target.classList.add('active');
+  if(name==='surface') loadSurface();
+  if(name==='smile') setTimeout(()=>renderSmile(),50);
+}
+
+// ── Vol Smile ─────────────────────────────────────────────────────────────────
+function toggleOverlay(el){
+  const ov = el.dataset.ov;
+  if(ov==='today') return; // always on
+  el.classList.toggle('active');
+  smileOverlays[ov] = el.classList.contains('active');
+  renderSmile();
+}
+function setChartType(el,type){
+  document.querySelectorAll('#smile-type-pills .pill').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  smileChartType = type;
+  renderSmile();
+}
+
+function buildSmileData(ticker, dateSet){
+  // dateSet: 'today'|'prev'|'week'
+  const srcMap = {today:D.options_today, prev:D.options_prev, week:D.options_week};
+  const rows = (srcMap[dateSet]||[]).filter(r=>r.ticker===ticker);
+  const F    = D.futures[ticker];
+  const lt   = D.last_trade[ticker];
+  if(!F||!lt) return {strikes:[],callIVs:[],putIVs:[]};
+
+  const refDate = dateSet==='today'?D.last_date: dateSet==='prev'?D.prev_date:D.week_date;
+  const dte = getDTE(ticker, refDate);
+  const T   = dte/365;
+  const r   = getRFR();
+
+  const strikes = [...new Set(rows.map(r=>r.strike))].sort((a,b)=>a-b);
+  const callIVs = [], putIVs = [];
+
+  for(const k of strikes){
+    const callRow = rows.find(r=>r.put_call==='Call'&&Math.abs(r.strike-k)<0.01);
+    const putRow  = rows.find(r=>r.put_call==='Put' &&Math.abs(r.strike-k)<0.01);
+
+    const cIV = callRow&&callRow.px>0&&T>0 ?
+      Black76.impliedVol(callRow.px,F,k,T,r,true) : null;
+    const pIV = putRow&&putRow.px>0&&T>0 ?
+      Black76.impliedVol(putRow.px,F,k,T,r,false) : null;
+
+    callIVs.push(cIV!=null?cIV*100:null);
+    putIVs.push(pIV!=null?pIV*100:null);
+  }
+  return {strikes, callIVs, putIVs};
+}
+
+function renderSmile(){
+  const ticker = document.getElementById('smile-expiry').value;
+  if(!ticker) return;
+
+  const today = buildSmileData(ticker,'today');
+  const atm   = D.atm_strike[ticker];
+
+  if(smileChartType === 'smile'){
+    const datasets = [
+      {label:'Calls (today)',data:today.callIVs,borderColor:'#E8C547',backgroundColor:'transparent',
+       borderWidth:2,spanGaps:true,pointRadius:3,tension:0.3},
+      {label:'Puts (today)', data:today.putIVs, borderColor:'#3b82f6',backgroundColor:'transparent',
+       borderWidth:2,spanGaps:true,pointRadius:3,tension:0.3},
+    ];
+    if(smileOverlays.prev){
+      const prev = buildSmileData(ticker,'prev');
+      datasets.push(
+        {label:'Calls (prev)',data:prev.callIVs,borderColor:'rgba(232,197,71,.4)',
+         backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],spanGaps:true,pointRadius:0,tension:0.3},
+        {label:'Puts (prev)', data:prev.putIVs, borderColor:'rgba(59,130,246,.4)',
+         backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],spanGaps:true,pointRadius:0,tension:0.3},
+      );
+    }
+    if(smileOverlays.week){
+      const week = buildSmileData(ticker,'week');
+      datasets.push(
+        {label:'Calls (week)',data:week.callIVs,borderColor:'rgba(232,197,71,.2)',
+         backgroundColor:'transparent',borderWidth:1,borderDash:[2,6],spanGaps:true,pointRadius:0,tension:0.3},
+        {label:'Puts (week)', data:week.putIVs, borderColor:'rgba(59,130,246,.2)',
+         backgroundColor:'transparent',borderWidth:1,borderDash:[2,6],spanGaps:true,pointRadius:0,tension:0.3},
+      );
+    }
+    drawSmileChart(today.strikes, datasets, atm, 'IV (%)');
+  } else {
+    // IV change chart: today vs prev
+    const prev = buildSmileData(ticker,'prev');
+    const cChg = today.callIVs.map((v,i)=> v!=null&&prev.callIVs[i]!=null ? v-prev.callIVs[i] : null);
+    const pChg = today.putIVs.map((v,i)=> v!=null&&prev.putIVs[i]!=null ? v-prev.putIVs[i] : null);
+    const datasets = [
+      {label:'Call IV Chg',data:cChg,borderColor:'transparent',
+       backgroundColor: cChg.map(v=>v>=0?'rgba(34,197,94,.7)':'rgba(239,68,68,.7)'),
+       spanGaps:true,barThickness:8},
+      {label:'Put IV Chg', data:pChg,borderColor:'transparent',
+       backgroundColor: pChg.map(v=>v>=0?'rgba(34,197,94,.4)':'rgba(239,68,68,.4)'),
+       spanGaps:true,barThickness:8},
+    ];
+    drawSmileChart(today.strikes, datasets, atm, 'IV Chg (vol pts)', 'bar');
+  }
+
+  // Top-5 change table
+  const prev2 = buildSmileData(ticker,'prev');
+  const rows = today.strikes.map((k,i)=>{
+    const cc = today.callIVs[i]!=null&&prev2.callIVs[i]!=null ? today.callIVs[i]-prev2.callIVs[i] : null;
+    const pc = today.putIVs[i]!=null&&prev2.putIVs[i]!=null  ? today.putIVs[i]-prev2.putIVs[i]   : null;
+    const todayRow = D.options_today.filter(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01);
+    const prevRow  = D.options_prev.filter(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01);
+    const coiC = todayRow.find(r=>r.put_call==='Call'), coiP = todayRow.find(r=>r.put_call==='Put');
+    const poiC = prevRow.find(r=>r.put_call==='Call'),  poiP = prevRow.find(r=>r.put_call==='Put');
+    return {
+      k, cc, pc,
+      coiChg: coiC&&poiC ? coiC.oi-poiC.oi : null,
+      poiChg: coiP&&poiP ? coiP.oi-poiP.oi : null,
+      score: Math.max(Math.abs(cc||0), Math.abs(pc||0))
+    };
+  }).sort((a,b)=>b.score-a.score).slice(0,5);
+
+  const tbody = document.querySelector('#smile-chg-table tbody');
+  tbody.innerHTML = rows.map(r=>`
+    <tr>
+      <td>${r.k.toFixed(2)}</td>
+      <td class="num ${clr(r.cc)}">${r.cc!=null?fmtSgn(r.cc)+'%':'—'}</td>
+      <td class="num ${clr(r.pc)}">${r.pc!=null?fmtSgn(r.pc)+'%':'—'}</td>
+      <td class="num ${clr(r.coiChg)}">${r.coiChg!=null?r.coiChg.toLocaleString():'—'}</td>
+      <td class="num ${clr(r.poiChg)}">${r.poiChg!=null?r.poiChg.toLocaleString():'—'}</td>
+    </tr>`).join('');
+}
+
+function drawSmileChart(labels, datasets, atmStrike, yLabel, type='line'){
+  const ctx = document.getElementById('smile-chart').getContext('2d');
+  if(smileChart){ smileChart.destroy(); smileChart=null; }
+  smileChart = new Chart(ctx,{
+    type,
+    data:{labels, datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:'#94a3b8',font:{size:11}}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y!=null?ctx.parsed.y.toFixed(2)+'%':'—'}`}},
+        annotation: atmStrike ? {annotations:{atm:{
+          type:'line',xMin:atmStrike,xMax:atmStrike,
+          borderColor:'rgba(232,197,71,.5)',borderWidth:1,borderDash:[4,4],
+          label:{content:'ATM',display:true,color:'#E8C547',font:{size:10}}
+        }}} : {},
+      },
+      scales:{
+        x:{ticks:{color:'#94a3b8',font:{size:10}},grid:{color:'#1e2a3a'}},
+        y:{ticks:{color:'#94a3b8',font:{size:10},callback:v=>v+'%'},
+           grid:{color:'#1e2a3a'}, title:{display:true,text:yLabel,color:'#4a6080',font:{size:10}}},
+      },
+    }
+  });
+}
+
+// ── Templates ─────────────────────────────────────────────────────────────────
+const TMPL_CATS = {
+  'Single':      ['Long Call','Short Call','Long Put','Short Put'],
+  'Spreads':     ['Bull Call Spread','Bear Put Spread','Bull Put Spread','Bear Call Spread'],
+  'Butterflies': ['Call Butterfly','Put Butterfly','Iron Butterfly'],
+  'Vol':         ['Long Straddle','Short Straddle','Long Strangle','Short Strangle','Long Fence','Short Fence'],
+  'Cotton':      ['On-Call Hedge','Synthetic Long','Covered Call'],
+  'Calendar':    ['Calendar Spread','Diagonal Spread'],
+};
+const TEMPLATES = {
+  'Long Call':        [{cp:'CALL',ls:'LONG', k:'ATM',  lots:1}],
+  'Short Call':       [{cp:'CALL',ls:'SHORT',k:'ATM',  lots:1}],
+  'Long Put':         [{cp:'PUT', ls:'LONG', k:'ATM',  lots:1}],
+  'Short Put':        [{cp:'PUT', ls:'SHORT',k:'ATM',  lots:1}],
+  'Bull Call Spread': [{cp:'CALL',ls:'LONG', k:'25DC', lots:1},{cp:'CALL',ls:'SHORT',k:'10DC',lots:1}],
+  'Bear Put Spread':  [{cp:'PUT', ls:'LONG', k:'25DP', lots:1},{cp:'PUT', ls:'SHORT',k:'10DP',lots:1}],
+  'Bull Put Spread':  [{cp:'PUT', ls:'SHORT',k:'25DP', lots:1},{cp:'PUT', ls:'LONG', k:'10DP',lots:1}],
+  'Bear Call Spread': [{cp:'CALL',ls:'SHORT',k:'25DC', lots:1},{cp:'CALL',ls:'LONG', k:'10DC',lots:1}],
+  'Call Butterfly':   [{cp:'CALL',ls:'LONG', k:'25DP', lots:1},{cp:'CALL',ls:'SHORT',k:'ATM',lots:2},{cp:'CALL',ls:'LONG',k:'25DC',lots:1}],
+  'Put Butterfly':    [{cp:'PUT', ls:'LONG', k:'25DC', lots:1},{cp:'PUT', ls:'SHORT',k:'ATM',lots:2},{cp:'PUT', ls:'LONG',k:'25DP',lots:1}],
+  'Iron Butterfly':   [{cp:'CALL',ls:'SHORT',k:'ATM',  lots:1},{cp:'PUT', ls:'SHORT',k:'ATM',  lots:1},{cp:'CALL',ls:'LONG',k:'25DC',lots:1},{cp:'PUT',ls:'LONG',k:'25DP',lots:1}],
+  'Long Straddle':    [{cp:'CALL',ls:'LONG', k:'ATM',  lots:1},{cp:'PUT', ls:'LONG', k:'ATM',  lots:1}],
+  'Short Straddle':   [{cp:'CALL',ls:'SHORT',k:'ATM',  lots:1},{cp:'PUT', ls:'SHORT',k:'ATM',  lots:1}],
+  'Long Strangle':    [{cp:'CALL',ls:'LONG', k:'25DC', lots:1},{cp:'PUT', ls:'LONG', k:'25DP', lots:1}],
+  'Short Strangle':   [{cp:'CALL',ls:'SHORT',k:'25DC', lots:1},{cp:'PUT', ls:'SHORT',k:'25DP', lots:1}],
+  'Long Fence':       [{cp:'CALL',ls:'LONG', k:'25DC', lots:1},{cp:'PUT', ls:'SHORT',k:'25DP', lots:1}],
+  'Short Fence':      [{cp:'CALL',ls:'SHORT',k:'25DC', lots:1},{cp:'PUT', ls:'LONG', k:'25DP', lots:1}],
+  'On-Call Hedge':    [{cp:'PUT', ls:'LONG', k:'ATM',  lots:1},{isFutures:true,ls:'SHORT',lots:1}],
+  'Synthetic Long':   [{cp:'CALL',ls:'LONG', k:'ATM',  lots:1},{cp:'PUT', ls:'SHORT',k:'ATM',  lots:1}],
+  'Covered Call':     [{cp:'CALL',ls:'SHORT',k:'25DC', lots:1},{isFutures:true,ls:'LONG',lots:1}],
+  'Calendar Spread':  [{cp:'CALL',ls:'LONG', k:'ATM',  lots:1,expSlot:'FRONT'},{cp:'CALL',ls:'SHORT',k:'ATM',lots:1,expSlot:'BACK'}],
+  'Diagonal Spread':  [{cp:'CALL',ls:'LONG', k:'25DC', lots:1,expSlot:'FRONT'},{cp:'CALL',ls:'SHORT',k:'ATM',lots:1,expSlot:'BACK'}],
+};
+
+let activeTmplCat = 'Single';
+
+function buildTemplateUI(){
+  const cats = document.getElementById('tmpl-cats');
+  cats.innerHTML = Object.keys(TMPL_CATS).map(c=>
+    `<div class="pill ${c===activeTmplCat?'active':''}" onclick="selectTmplCat('${c}')">${c}</div>`
+  ).join('');
+  renderTmplSub();
+}
+function selectTmplCat(cat){
+  activeTmplCat=cat;
+  document.querySelectorAll('#tmpl-cats .pill').forEach(p=>p.classList.toggle('active',p.textContent===cat));
+  renderTmplSub();
+}
+function renderTmplSub(){
+  const sub = document.getElementById('tmpl-sub');
+  sub.innerHTML = TMPL_CATS[activeTmplCat].map(name=>
+    `<div class="pill" onclick="applyTemplate('${name}')">${name}</div>`
+  ).join('');
+}
+
+function resolveStrike(code, expiry){
+  const F   = D.futures[expiry];
+  const atm = D.atm_strike[expiry];
+  if(code==='ATM') return atm||F;
+  if(!F) return atm;
+
+  const lt = D.last_trade[expiry];
+  if(!lt) return atm;
+  const dte = getDTE(expiry, D.last_date);
+  const T   = dte/365;
+  const r   = getRFR();
+
+  const isCall = code.endsWith('C')||code==='10DC'||code==='25DC'||(!code.endsWith('P')&&!code.endsWith('D'));
+  const targetDelta = code.startsWith('25') ? 0.25 : 0.10;
+
+  // Get available strikes for this expiry from today's chain
+  const avail = [...new Set(D.options_today.filter(r=>r.ticker===expiry).map(r=>r.strike))].sort((a,b)=>a-b);
+  if(!avail.length) return atm;
+
+  // Find strike whose abs(delta) is closest to target
+  let bestK = atm, bestDiff = Infinity;
+  const sigmaGuess = (D.atm_iv[expiry]||20)/100;
+
+  for(const k of avail){
+    const isCallSide = isCall ? k >= (F||atm) : k <= (F||atm);
+    if(!isCallSide && targetDelta!==0.25) continue;
+    const mktPx = getChainPx(expiry, k, isCall?'Call':'Put');
+    const iv    = mktPx&&T>0 ? Black76.impliedVol(mktPx,F,k,T,r,isCall) : sigmaGuess;
+    const sigma = iv||sigmaGuess;
+    const d     = Math.abs(Black76.delta(F,k,T,r,sigma,isCall));
+    const diff  = Math.abs(d - targetDelta);
+    if(diff < bestDiff){ bestDiff=diff; bestK=k; }
+  }
+  return bestK;
+}
+
+function applyTemplate(name){
+  const tpls = TEMPLATES[name];
+  if(!tpls) return;
+  legs = [];
+  const front = D.expiries[0]||'';
+  const back  = D.expiries[1]||front;
+
+  for(const t of tpls){
+    const expiry = t.expSlot==='BACK' ? back : front;
+    if(t.isFutures){
+      addLegRaw({isFutures:true, expiry, ls:t.ls, lots:t.lots||1, entryPx:D.futures[expiry]||0});
+    } else {
+      const strike = resolveStrike(t.k, expiry);
+      const px     = getChainPx(expiry, strike, t.cp==='CALL'?'Call':'Put')||0;
+      addLegRaw({isFutures:false, expiry, cp:t.cp, ls:t.ls, strike, lots:t.lots||1, entryPx:px});
+    }
+  }
+  renderLegs();
+  recomputeAll();
+}
+
+// ── Leg management ────────────────────────────────────────────────────────────
+function addLeg(type){
+  const expiry = D.expiries[0]||'';
+  if(type==='futures'){
+    addLegRaw({isFutures:true, expiry, ls:'LONG', lots:1, entryPx:D.futures[expiry]||0});
+  } else {
+    const atm = D.atm_strike[expiry]||0;
+    const px  = getChainPx(expiry, atm, 'Call')||0;
+    addLegRaw({isFutures:false, expiry, cp:'CALL', ls:'LONG', strike:atm, lots:1, entryPx:px});
+  }
+  renderLegs();
+  recomputeAll();
+}
+function addLegRaw(obj){
+  legs.push({id:legIdCounter++, ...obj});
+}
+function removeLeg(id){
+  legs = legs.filter(l=>l.id!==id);
+  renderLegs();
+  recomputeAll();
+}
+
+function renderLegs(){
+  const tbody = document.getElementById('leg-tbody');
+  tbody.innerHTML = legs.map((leg,i)=>{
+    const expOpts = D.expiries.map(e=>`<option value="${e}"${e===leg.expiry?'selected':''}>${e}</option>`).join('');
+    const F   = D.futures[leg.expiry]||0;
+    const otmf = leg.isFutures||!leg.strike||!F ? '—'
+      : (Math.abs(leg.strike - F)/F*100).toFixed(2)+'%';
+    if(leg.isFutures){
+      return `<tr data-id="${leg.id}">
+        <td>${i+1}</td>
+        <td><span class="toggle-btn" style="color:var(--acc)">Futures</span></td>
+        <td><select class="leg-input" onchange="legChange(${leg.id},'expiry',this.value)">${expOpts}</select></td>
+        <td>—</td><td>—</td>
+        <td><button class="toggle-btn ${leg.ls==='LONG'?'active-long':'active-short'}"
+          onclick="legToggle(${leg.id},'ls',['LONG','SHORT'])">${leg.ls}</button></td>
+        <td><input class="leg-input" type="number" value="${leg.lots}" min="1"
+          onchange="legChange(${leg.id},'lots',+this.value)" style="width:55px"></td>
+        <td><input class="leg-input wide" type="number" value="${leg.entryPx.toFixed(3)}" step="0.01"
+          onchange="legChange(${leg.id},'entryPx',+this.value)"></td>
+        <td>—</td>
+        <td><button class="btn-del" onclick="removeLeg(${leg.id})">×</button></td>
+      </tr>`;
+    }
+    return `<tr data-id="${leg.id}">
+      <td>${i+1}</td>
+      <td><span class="toggle-btn" style="color:var(--dim)">Option</span></td>
+      <td><select class="leg-input" onchange="legChange(${leg.id},'expiry',this.value)">${expOpts}</select></td>
+      <td><input class="leg-input" type="number" value="${(leg.strike||0).toFixed(2)}" step="0.50"
+        onchange="legChange(${leg.id},'strike',+this.value)"></td>
+      <td><button class="toggle-btn ${leg.cp==='CALL'?'active-call':'active-put'}"
+        onclick="legToggle(${leg.id},'cp',['CALL','PUT'])">${leg.cp}</button></td>
+      <td><button class="toggle-btn ${leg.ls==='LONG'?'active-long':'active-short'}"
+        onclick="legToggle(${leg.id},'ls',['LONG','SHORT'])">${leg.ls}</button></td>
+      <td><input class="leg-input" type="number" value="${leg.lots}" min="1"
+        onchange="legChange(${leg.id},'lots',+this.value)" style="width:55px"></td>
+      <td><input class="leg-input wide" type="number" value="${(leg.entryPx||0).toFixed(3)}" step="0.01"
+        onchange="legChange(${leg.id},'entryPx',+this.value)"></td>
+      <td><span class="otmf-badge" title="Out of the money from forward">${otmf}</span></td>
+      <td><button class="btn-del" onclick="removeLeg(${leg.id})">×</button></td>
+    </tr>`;
+  }).join('');
+
+  // Update forward overrides panel
+  const expiries_in_legs = [...new Set(legs.map(l=>l.expiry))];
+  const fwdDiv = document.getElementById('fwd-overrides');
+  fwdDiv.innerHTML = expiries_in_legs.map(e=>`
+    <div style="font-size:11px;color:var(--dim);">${e} Forward:
+      <input type="number" id="fwd-${e}" value="${(D.futures[e]||0).toFixed(2)}" step="0.01"
+        style="width:75px;background:var(--surf2);border:1px solid var(--bord2);
+               color:var(--text);padding:2px 5px;border-radius:3px;font-size:11px;margin-left:6px"
+        onchange="recomputeAll()">
+      <span style="color:var(--muted);margin-left:4px">¢/lb</span>
+    </div>`).join('');
+
+  // DTE slider
+  if(legs.length){
+    const frontLeg = legs.find(l=>D.last_trade[l.expiry]);
+    if(frontLeg){
+      const maxDte = getDTE(frontLeg.expiry, D.last_date);
+      const slider = document.getElementById('dte-slider');
+      slider.max = maxDte;
+      if(dteOverride===null) slider.value = maxDte;
+      document.getElementById('dte-label-today').textContent = D.last_date;
+      document.getElementById('dte-label-exp').textContent   = D.last_trade[frontLeg.expiry]||'';
+      updateDteLabel(parseInt(slider.value));
+    }
+  }
+}
+
+function legChange(id, field, val){
+  const leg = legs.find(l=>l.id===id);
+  if(!leg) return;
+  leg[field] = val;
+  if(field==='expiry'){
+    if(leg.isFutures) leg.entryPx = D.futures[val]||0;
+    else {
+      const atm = D.atm_strike[val]||0;
+      leg.strike   = atm;
+      leg.entryPx  = getChainPx(val, atm, leg.cp==='CALL'?'Call':'Put')||0;
+    }
+  }
+  if(field==='strike'&&!leg.isFutures){
+    leg.entryPx = getChainPx(leg.expiry, val, leg.cp==='CALL'?'Call':'Put')||leg.entryPx;
+  }
+  renderLegs();
+  recomputeAll();
+}
+function legToggle(id, field, opts){
+  const leg = legs.find(l=>l.id===id);
+  if(!leg) return;
+  const cur = leg[field];
+  leg[field] = opts[(opts.indexOf(cur)+1)%opts.length];
+  if(field==='cp'&&!leg.isFutures){
+    leg.entryPx = getChainPx(leg.expiry, leg.strike, leg.cp==='CALL'?'Call':'Put')||leg.entryPx;
+  }
+  renderLegs();
+  recomputeAll();
+}
+
+// ── Greeks computation ────────────────────────────────────────────────────────
+function getFwdOverride(expiry){
+  const el = document.getElementById('fwd-'+expiry);
+  return el ? parseFloat(el.value)||D.futures[expiry]||0 : (D.futures[expiry]||0);
+}
+
+function computeGreeks(leg, dteOv){
+  const r = getRFR();
+  if(leg.isFutures){
+    const sign = leg.ls==='LONG'?1:-1;
+    return {iv:null, delta:sign*leg.lots, gamma:0, theta:0, vega:0, price:leg.entryPx};
+  }
+  const F      = getFwdOverride(leg.expiry);
+  const K      = leg.strike;
+  const isCall = leg.cp==='CALL';
+  const dte    = dteOv!=null ? dteOv : getDTE(leg.expiry, D.last_date);
+  const T      = dte/365;
+  const mkt    = leg.entryPx;
+  if(!F||!K||mkt<=0) return null;
+  const sigma  = Black76.impliedVol(mkt,F,K,T,r,isCall)||0.01;
+  return Black76.greeks(F,K,T,r,sigma,isCall,leg.lots,leg.ls);
+}
+
+let _debounceTimer = null;
+function recomputeAll(){
+  clearTimeout(_debounceTimer);
+  _debounceTimer = setTimeout(_doRecompute, 80);
+}
+
+function _doRecompute(){
+  const slider = document.getElementById('dte-slider');
+  const dteOv  = parseInt(slider.value);
+  // Which expiry is "front" for DTE purposes — use leg-specific DTE
+  const gList  = legs.map(leg=>computeGreeks(leg, null)); // use real DTE per leg
+
+  // Net greeks
+  let net = {delta:0,gamma:0,theta:0,vega:0};
+  for(const g of gList){ if(g){ net.delta+=g.delta; net.gamma+=g.gamma; net.theta+=g.theta; net.vega+=g.vega; } }
+
+  renderGreekSummary(net);
+  renderLegGreeksTable(gList);
+  renderScenarioGrid(dteOv);
+  renderNeutralSuggestion(net.delta);
+}
+
+function renderGreekSummary(net){
+  const CONTRACT = 50000; // lbs
+  const el = document.getElementById('greek-summary');
+  if(!legs.length){ el.innerHTML='<div style="color:var(--muted);font-size:11px">Add legs to see Greeks</div>'; return; }
+  const totalLots = legs.reduce((s,l)=>s+l.lots,0);
+  const thetaDollar = net.theta * CONTRACT * totalLots / 100;
+  const vegaDollar  = net.vega  * CONTRACT * totalLots / 100;
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px">NET GREEKS — ${totalLots} lots basis</div>
+    <div class="greek-row">
+      <span class="greek-sym">Δ</span>
+      <div>
+        <div class="greek-val ${clr(net.delta)}">${fmt4(net.delta)}</div>
+        <div class="greek-sub">${(net.delta*50000).toFixed(0)} lbs fut equiv</div>
+      </div>
+    </div>
+    <div class="greek-row">
+      <span class="greek-sym">Γ</span>
+      <div>
+        <div class="greek-val">${fmt4(net.gamma)}</div>
+        <div class="greek-sub">+${fmt4(net.gamma)}¢ per 1¢ move</div>
+      </div>
+    </div>
+    <div class="greek-row">
+      <span class="greek-sym">Θ</span>
+      <div>
+        <div class="greek-val ${clr(-net.theta)}">${fmt4(net.theta)}¢/day</div>
+        <div class="greek-sub">${thetaDollar>=0?'+':''}$${Math.abs(thetaDollar).toFixed(0)}/day total</div>
+      </div>
+    </div>
+    <div class="greek-row">
+      <span class="greek-sym">ν</span>
+      <div>
+        <div class="greek-val ${clr(net.vega)}">${fmt4(net.vega)}¢/vol pt</div>
+        <div class="greek-sub">${vegaDollar>=0?'+':''}$${Math.abs(vegaDollar).toFixed(0)} per 1 vol pt</div>
+      </div>
+    </div>`;
+}
+
+function renderLegGreeksTable(gList){
+  const tbody = document.getElementById('greeks-tbody');
+  const rows  = legs.map((leg,i)=>{
+    const g = gList[i];
+    const desc = leg.isFutures
+      ? `${leg.expiry} Fut ${leg.ls} ${leg.lots}`
+      : `${leg.expiry} ${(leg.strike||0).toFixed(2)}${leg.cp[0]} ${leg.ls} ${leg.lots}`;
+    if(!g) return `<tr><td>${i+1}</td><td>${desc}</td><td colspan="5" class="num" style="color:var(--muted)">—</td></tr>`;
+    return `<tr>
+      <td>${i+1}</td><td style="font-size:10px">${desc}</td>
+      <td class="num ${clr(g.delta)}">${fmt4(g.delta)}</td>
+      <td class="num">${fmt4(g.gamma)}</td>
+      <td class="num ${clr(g.theta)}">${fmt4(g.theta)}¢</td>
+      <td class="num ${clr(g.vega)}">${fmt4(g.vega)}¢</td>
+      <td class="num">${g.iv!=null?g.iv.toFixed(1)+'%':'—'}</td>
+    </tr>`;
+  });
+  // Net row
+  const gAll = gList.filter(Boolean);
+  if(gAll.length){
+    const nd = gAll.reduce((s,g)=>s+g.delta,0);
+    const ng = gAll.reduce((s,g)=>s+g.gamma,0);
+    const nt = gAll.reduce((s,g)=>s+g.theta,0);
+    const nv = gAll.reduce((s,g)=>s+g.vega,0);
+    rows.push(`<tr>
+      <td>NET</td><td></td>
+      <td class="num ${clr(nd)}">${fmt4(nd)}</td>
+      <td class="num">${fmt4(ng)}</td>
+      <td class="num ${clr(nt)}">${fmt4(nt)}¢</td>
+      <td class="num ${clr(nv)}">${fmt4(nv)}¢</td>
+      <td class="num">—</td>
+    </tr>`);
+  }
+  tbody.innerHTML = rows.join('');
+}
+
+// ── Scenario grid ─────────────────────────────────────────────────────────────
+const PRICE_SHIFTS = [-8,-6,-4,-2,0,2,4,6,8];
+const VOL_SHIFTS   = [-4,-2,0,2,4];
+let scenModeVal = 'today';
+
+function setScenMode(m, el){
+  scenModeVal = m;
+  document.getElementById('scen-today-btn').classList.toggle('active',m==='today');
+  document.getElementById('scen-exp-btn').classList.toggle('active',m==='expiry');
+  recomputeAll();
+}
+
+function renderScenarioGrid(dteOverrideVal){
+  const table = document.getElementById('scen-grid');
+  if(!legs.length){ table.innerHTML=''; document.getElementById('scen-stats').innerHTML=''; return; }
+
+  const r = getRFR();
+  // Build leg params
+  const legParams = legs.map(leg=>{
+    const F = getFwdOverride(leg.expiry);
+    const dte = dteOverrideVal!=null ? dteOverrideVal : getDTE(leg.expiry, D.last_date);
+    const T = dte/365;
+    if(leg.isFutures){
+      return {isFutures:true, F, K:null, sigma:null, isCall:null,
+              entryPx:leg.entryPx, lots:leg.lots, ls:leg.ls};
+    }
+    const K      = leg.strike||0;
+    const isCall = leg.cp==='CALL';
+    const mkt    = leg.entryPx||0;
+    const sigma  = mkt>0&&T>0 ? (Black76.impliedVol(mkt,F,K,T,r,isCall)||0.01) : 0.01;
+    return {isFutures:false, F, K, sigma, isCall, entryPx:mkt, lots:leg.lots, ls:leg.ls, T};
+  });
+
+  // Compute P&L for each cell
+  const cells = PRICE_SHIFTS.map(dF=>
+    VOL_SHIFTS.map(dV=>{
+      let total = 0;
+      for(const p of legParams){
+        if(p.isFutures){
+          const sign = p.ls==='LONG'?1:-1;
+          total += sign*p.lots*dF;
+        } else {
+          if(scenModeVal==='expiry'){
+            const newF = p.F+dF;
+            const sign = p.ls==='LONG'?1:-1;
+            const intr = Math.max(0, p.isCall ? newF-p.K : p.K-newF);
+            total += sign*p.lots*(intr - p.entryPx);
+          } else {
+            const newF = p.F+dF;
+            const newSig = Math.max(0.001, p.sigma+dV/100);
+            const T_ov  = dteOverrideVal!=null ? dteOverrideVal/365 : p.T;
+            const newPx = Black76.price(newF,p.K,T_ov,r,newSig,p.isCall);
+            const sign  = p.ls==='LONG'?1:-1;
+            total += sign*p.lots*(newPx - p.entryPx);
+          }
+        }
+      }
+      return total;
+    })
+  );
+
+  // Build table
+  const volHdr = ['<tr><th>Price \\ Vol</th>',
+    ...VOL_SHIFTS.map(v=>`<th>${v>=0?'+':''}${v} vol</th>`),'</tr>'].join('');
+
+  const dataRows = PRICE_SHIFTS.map((dF,pi)=>{
+    const isFlat = dF===0;
+    const rowCells = VOL_SHIFTS.map((dV,vi)=>{
+      const v = cells[pi][vi];
+      const isCurrent = isFlat&&dV===0;
+      return `<td style="background:${pnlColor(v)};${isCurrent?'outline:2px solid #E8C547;outline-offset:-2px':''}">
+        ${pnlTxt(v)}</td>`;
+    }).join('');
+    return `<tr>
+      <td class="row-label">${dF>=0?'+':''}${dF}¢</td>${rowCells}
+    </tr>`;
+  }).join('');
+
+  table.innerHTML = `<thead>${volHdr}</thead><tbody>${dataRows}</tbody>`;
+
+  // Stats
+  const allVals = cells.flat();
+  const maxV = Math.max(...allVals), minV = Math.min(...allVals);
+  const maxIdx = allVals.indexOf(maxV), minIdx = allVals.indexOf(minV);
+  const flatRow = cells[PRICE_SHIFTS.indexOf(0)];
+  const breakEven = PRICE_SHIFTS.find((dF,i)=> flatRow[VOL_SHIFTS.indexOf(0)]!==undefined &&
+    cells[i][VOL_SHIFTS.indexOf(0)] >= 0);
+
+  document.getElementById('scen-stats').innerHTML = `
+    <div>Max gain: <span class="pos">+${maxV.toFixed(2)}¢/lb</span></div>
+    <div>Max loss: <span class="neg">${minV.toFixed(2)}¢/lb</span></div>
+    ${breakEven!=null?`<div>Break-even: <span>~${((D.futures[legs[0]?.expiry]||0)+breakEven).toFixed(2)}¢ (flat vol)</span></div>`:''}`;
+}
+
+// ── DTE slider ────────────────────────────────────────────────────────────────
+function onDteSlide(val){
+  dteOverride = parseInt(val);
+  updateDteLabel(dteOverride);
+  recomputeAll();
+}
+function updateDteLabel(dte){
+  document.getElementById('dte-label-dte').textContent = `DTE: ${dte}`;
+}
+
+// ── Delta neutral ─────────────────────────────────────────────────────────────
+function openNeutral(){
+  const p = document.getElementById('neutral-panel');
+  p.style.display = p.style.display==='none'?'block':'none';
+}
+function renderNeutralSuggestion(netDelta){
+  const el = document.getElementById('neutral-result');
+  if(!el) return;
+  const target  = parseFloat(document.getElementById('target-delta').value)||0;
+  const diff    = netDelta - target;
+  const lots    = Math.round(Math.abs(diff));
+  const dir     = diff>0?'SELL':'BUY';
+  const expiry  = legs[0]?.expiry||D.expiries[0]||'';
+  el.innerHTML  = lots===0
+    ? '<span style="color:var(--grn)">Already at target Δ</span>'
+    : `To reach Δ ${target.toFixed(2)}: <strong>${dir} ${lots} lots ${expiry} futures</strong>`;
+  el.dataset.neutralLots  = lots;
+  el.dataset.neutralDir   = dir;
+  el.dataset.neutralExpiry = expiry;
+}
+function addNeutralHedge(){
+  const el = document.getElementById('neutral-result');
+  const lots   = parseInt(el.dataset.neutralLots)||0;
+  const dir    = el.dataset.neutralDir;
+  const expiry = el.dataset.neutralExpiry;
+  if(!lots||!expiry) return;
+  addLegRaw({isFutures:true, expiry, ls:dir==='BUY'?'LONG':'SHORT', lots, entryPx:D.futures[expiry]||0});
+  renderLegs();
+  recomputeAll();
+}
+
+// ── Vol Surface panel ─────────────────────────────────────────────────────────
+let surfLoaded = false;
+function loadSurface(){
+  if(surfLoaded) return;
+  surfLoaded = true;
+
+  const r = getRFR();
+
+  // Build surface table: rows = expiries, cols = delta buckets
+  const DELTAS = [
+    {label:'10Δ Put', target:-0.10, isCall:false},
+    {label:'25Δ Put', target:-0.25, isCall:false},
+    {label:'ATM',     target:null,  isCall:null},
+    {label:'25Δ Call',target: 0.25, isCall:true},
+    {label:'10Δ Call',target: 0.10, isCall:true},
+  ];
+
+  const tbody = document.getElementById('surf-tbody');
+  const atmHistory = {};  // ticker -> [{date, iv}]
+
+  for(const ticker of D.expiries){
+    const F   = D.futures[ticker];
+    const lt  = D.last_trade[ticker];
+    const atm = D.atm_strike[ticker];
+    if(!F||!lt) continue;
+
+    const dte = getDTE(ticker, D.last_date);
+    const T   = dte/365;
+
+    const avail = [...new Set(D.options_today.filter(r=>r.ticker===ticker).map(r=>r.strike))].sort((a,b)=>a-b);
+    const sigmaGuess = (D.atm_iv[ticker]||20)/100;
+
+    function findDeltaStrike(targetDelta, isCall){
+      let bestK=atm, bestDiff=Infinity;
+      for(const k of avail){
+        const mkt   = getChainPx(ticker,k,isCall?'Call':'Put');
+        const sigma = mkt&&T>0 ? (Black76.impliedVol(mkt,F,k,T,r,isCall)||sigmaGuess) : sigmaGuess;
+        const d     = Black76.delta(F,k,T,r,sigma,isCall);
+        const diff  = Math.abs(d - targetDelta);
+        if(diff<bestDiff){bestDiff=diff;bestK=k;}
+      }
+      return bestK;
+    }
+
+    function getIVatDelta(targetDelta, isCall){
+      if(targetDelta===null) return D.atm_iv[ticker];
+      const k   = findDeltaStrike(targetDelta, isCall);
+      const mkt = getChainPx(ticker,k,isCall?'Call':'Put');
+      if(!mkt||T<=0) return null;
+      const iv  = Black76.impliedVol(mkt,F,k,T,r,isCall);
+      return iv ? iv*100 : null;
+    }
+
+    const cells = DELTAS.map(d=>getIVatDelta(d.target,d.isCall));
+
+    tbody.innerHTML += `<tr>
+      <td style="font-weight:600;color:var(--acc)">${ticker}</td>
+      ${cells.map(v=>`<td class="num">${v!=null?v.toFixed(1)+'%':'—'}</td>`).join('')}
+    </tr>`;
+  }
+
+  // ATM IV history chart (just use atm_iv values per expiry as a bar)
+  const ctxS = document.getElementById('surf-chart').getContext('2d');
+  const colors = ['#E8C547','#3b82f6','#22c55e','#ef4444','#a855f7'];
+  const atmDatasets = D.expiries.map((e,i)=>({
+    label: e,
+    data: [D.atm_iv[e]||null],
+    backgroundColor: colors[i%colors.length]+'99',
+    borderColor: colors[i%colors.length],
+    borderWidth:2,
+  }));
+  if(surfChart) surfChart.destroy();
+  surfChart = new Chart(ctxS,{
+    type:'bar',
+    data:{labels:['Current ATM IV'], datasets:atmDatasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#94a3b8',font:{size:10}}}},
+      scales:{
+        x:{ticks:{color:'#94a3b8'},grid:{color:'#1e2a3a'}},
+        y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'#1e2a3a'},
+           title:{display:true,text:'ATM IV (%)',color:'#4a6080',font:{size:10}}},
+      },
+    }
+  });
+
+  // 25Δ skew per expiry
+  const skewVals = D.expiries.map(e=>D.skew_value[e]??null);
+  const ctxK = document.getElementById('skew-chart').getContext('2d');
+  if(skewChart) skewChart.destroy();
+  skewChart = new Chart(ctxK,{
+    type:'bar',
+    data:{
+      labels: D.expiries,
+      datasets:[{
+        label:'25Δ Skew (Put − Call)',
+        data: skewVals,
+        backgroundColor: skewVals.map(v=>v==null?'#333': v>0?'rgba(239,68,68,.6)':'rgba(34,197,94,.6)'),
+        borderColor:     skewVals.map(v=>v==null?'#333': v>0?'#ef4444':'#22c55e'),
+        borderWidth:2,
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{ticks:{color:'#94a3b8'},grid:{color:'#1e2a3a'}},
+        y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'#1e2a3a'},
+           title:{display:true,text:'Put IV − Call IV (vol pts)',color:'#4a6080',font:{size:10}}},
+      },
+    }
+  });
+
+  document.getElementById('surface-loading').style.display='none';
+  document.getElementById('surface-content').style.display='block';
+}
+
+// ── Export PNG ────────────────────────────────────────────────────────────────
+function openExport(){
+  document.getElementById('exp-client').value = document.getElementById('client-ref').value||'';
+  document.getElementById('export-modal').classList.add('open');
+}
+function closeExport(){ document.getElementById('export-modal').classList.remove('open'); }
+function setExpOv(mode,el){
+  expOv=mode;
+  ['exp-ov-today','exp-ov-dod','exp-ov-wow'].forEach(id=>
+    document.getElementById(id).classList.remove('active'));
+  el.classList.add('active');
+}
+
+async function generatePng(){
+  const ticker  = document.getElementById('exp-expiry').value||D.expiries[0]||'CT';
+  const client  = document.getElementById('exp-client').value;
+  const dateStr = D.last_date;
+
+  // Build export stage HTML
+  const stage = document.getElementById('export-stage');
+
+  // Capture Chart.js canvases as base64 before html2canvas
+  let smileImgSrc = '';
+  if(smileChart){
+    try{ smileImgSrc = smileChart.toBase64Image(); }catch(e){}
+  }
+
+  // Position summary
+  const gList = legs.map(leg=>computeGreeks(leg,null));
+  const nd = gList.filter(Boolean).reduce((s,g)=>s+g.delta,0);
+  const nt = gList.filter(Boolean).reduce((s,g)=>s+g.theta,0);
+  const nv = gList.filter(Boolean).reduce((s,g)=>s+g.vega,0);
+  const legRows = legs.map((l,i)=>{
+    const g = gList[i];
+    const desc = l.isFutures
+      ? `${l.expiry} Futures ${l.ls} ${l.lots} lots`
+      : `${l.expiry} ${(l.strike||0).toFixed(2)} ${l.cp} ${l.ls} ${l.lots} lots`;
+    return `<tr style="border-bottom:1px solid #ddd">
+      <td style="padding:3px 8px">${desc}</td>
+      <td style="padding:3px 8px;text-align:right">${g?g.delta.toFixed(4):'—'}</td>
+      <td style="padding:3px 8px;text-align:right">${g?g.theta.toFixed(4)+'¢':'—'}</td>
+      <td style="padding:3px 8px;text-align:right">${g&&g.iv!=null?g.iv.toFixed(1)+'%':'—'}</td>
+    </tr>`;
+  }).join('');
+
+  stage.innerHTML = `
+  <div style="font-family:Segoe UI,Arial,sans-serif;background:#fff;color:#000;padding:24px;width:1160px">
+    <!-- Header -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;
+      border-bottom:2px solid #000;padding-bottom:10px;margin-bottom:14px">
+      <div>
+        <div style="font-size:18px;font-weight:700;letter-spacing:.02em">VLM COMMODITIES LTD</div>
+        <div style="font-size:12px;color:#555;margin-top:2px">Cotton No.2 Options Analytics</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:14px;font-weight:600">CT Options — ${dateStr}</div>
+        ${client?`<div style="font-size:12px;color:#555">Client: ${client}</div>`:''}
+      </div>
+    </div>
+    <!-- Stats bar -->
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
+      ${[
+        ['ATM IV',    D.atm_iv[ticker]!=null?D.atm_iv[ticker].toFixed(1)+'%':'—'],
+        ['1D Chg',    D.atm_iv_1d_chg[ticker]!=null?fmtSgn(D.atm_iv_1d_chg[ticker])+'pts':'—'],
+        ['IV %ile',   D.iv_percentile[ticker]!=null?D.iv_percentile[ticker]+'th':'—'],
+        ['Skew',      D.skew_direction[ticker]||'—'],
+        ['C/P Ratio', D.cp_ratio[ticker]!=null?D.cp_ratio[ticker].toFixed(2):'—'],
+      ].map(([l,v])=>`
+        <div style="background:#f5f5f5;border-radius:4px;padding:8px 10px">
+          <div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:.06em">${l}</div>
+          <div style="font-size:16px;font-weight:700;margin-top:2px">${v}</div>
+        </div>`).join('')}
+    </div>
+    <!-- Vol Smile -->
+    ${smileImgSrc?`<div style="margin-bottom:14px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#888;margin-bottom:6px">
+        Vol Smile — ${ticker}</div>
+      <img src="${smileImgSrc}" style="width:100%;max-height:220px;object-fit:contain">
+    </div>`:''}
+    <!-- Position -->
+    ${legs.length?`<div style="margin-bottom:14px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#888;margin-bottom:6px">Position</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:#f0f0f0">
+          <th style="padding:4px 8px;text-align:left">Leg</th>
+          <th style="padding:4px 8px;text-align:right">Delta</th>
+          <th style="padding:4px 8px;text-align:right">Theta/day</th>
+          <th style="padding:4px 8px;text-align:right">IV</th>
+        </tr></thead>
+        <tbody>${legRows}</tbody>
+        <tfoot><tr style="font-weight:700;background:#f5f5f5">
+          <td style="padding:4px 8px">NET</td>
+          <td style="padding:4px 8px;text-align:right">${nd.toFixed(4)}</td>
+          <td style="padding:4px 8px;text-align:right">${nt.toFixed(4)}¢</td>
+          <td style="padding:4px 8px;text-align:right">—</td>
+        </tfoot>
+      </table>
+      <div style="font-size:11px;color:#555;margin-top:6px">
+        Net Δ ${nd.toFixed(4)} · Θ ${nt.toFixed(4)}¢/day · ν ${nv.toFixed(4)}¢/vol pt
+      </div>
+    </div>`:''}
+    <!-- Scenario Grid -->
+    <div>
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#888;margin-bottom:6px">
+        Scenario P&amp;L (¢/lb)</div>
+      ${buildScenarioHtmlTable()}
+    </div>
+    <div style="font-size:9px;color:#aaa;margin-top:16px;border-top:1px solid #eee;padding-top:8px">
+      VLM Commodities LTD · Generated ${new Date().toISOString().slice(0,19).replace('T',' ')} UTC ·
+      For discussion purposes only. Not investment advice.
+    </div>
+  </div>`;
+
+  try {
+    const canvas = await html2canvas(stage, {scale:2, useCORS:true, logging:false});
+    const link   = document.createElement('a');
+    link.download = `VLM_CT_Options_${dateStr}.png`;
+    link.href     = canvas.toDataURL('image/png');
+    link.click();
+  } catch(e){
+    alert('PNG generation failed: '+e.message);
+  }
+  closeExport();
+}
+
+function buildScenarioHtmlTable(){
+  if(!legs.length) return '<div style="color:#aaa">No position entered</div>';
+  const r = getRFR();
+  const legParams = legs.map(leg=>{
+    const F = getFwdOverride(leg.expiry);
+    const dte = getDTE(leg.expiry, D.last_date);
+    const T   = dte/365;
+    if(leg.isFutures) return {isFutures:true,F,entryPx:leg.entryPx,lots:leg.lots,ls:leg.ls};
+    const K=leg.strike||0, isCall=leg.cp==='CALL', mkt=leg.entryPx||0;
+    const sigma=mkt>0&&T>0?(Black76.impliedVol(mkt,F,K,T,r,isCall)||0.01):0.01;
+    return {isFutures:false,F,K,sigma,isCall,entryPx:mkt,lots:leg.lots,ls:leg.ls,T};
+  });
+
+  const cells = PRICE_SHIFTS.map(dF=>VOL_SHIFTS.map(dV=>{
+    let tot=0;
+    for(const p of legParams){
+      if(p.isFutures){ tot+=(p.ls==='LONG'?1:-1)*p.lots*dF; }
+      else {
+        const newF=p.F+dF, newSig=Math.max(0.001,p.sigma+dV/100);
+        const newPx=Black76.price(newF,p.K,p.T,r,newSig,p.isCall);
+        tot+=(p.ls==='LONG'?1:-1)*p.lots*(newPx-p.entryPx);
+      }
+    }
+    return tot;
+  }));
+
+  const colHdr = ['<th style="padding:4px 6px;background:#e8e8e8">Px \\ Vol</th>',
+    ...VOL_SHIFTS.map(v=>`<th style="padding:4px 6px;background:#e8e8e8">${v>=0?'+':''}${v}v</th>`)].join('');
+
+  const dataRows = PRICE_SHIFTS.map((dF,pi)=>{
+    const cols = VOL_SHIFTS.map((dV,vi)=>{
+      const v=cells[pi][vi];
+      const isFlat=dF===0&&dV===0;
+      const bg = v>2?'#c6efce':v>0.1?'#e2efda':v<-2?'#ffc7ce':v<-0.1?'#ffeb9c':'#fff';
+      const fw = isFlat?'700':'400';
+      const border = isFlat?'2px solid #000':'';
+      return `<td style="padding:4px 6px;text-align:center;background:${bg};font-weight:${fw};
+        ${border?'outline:'+border+';outline-offset:-2px':''}">
+        ${pnlTxt(v)}</td>`;
+    }).join('');
+    return `<tr>
+      <td style="padding:4px 8px;background:#e8e8e8;font-weight:600;text-align:right">
+        ${dF>=0?'+':''}${dF}¢</td>${cols}
+    </tr>`;
+  }).join('');
+
+  return `<table style="border-collapse:collapse;font-size:11px;width:100%">
+    <thead><tr>${colHdr}</tr></thead>
+    <tbody>${dataRows}</tbody>
+  </table>`;
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
