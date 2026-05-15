@@ -94,26 +94,42 @@ def implied_vol(mkt_price, F, K, T, r, is_call):
     return sigma
 
 # ── Ticker / security_des parsing ─────────────────────────────────────────────
-# Actual CSV format: security_des = "CTN6P    62" or "CTN6C    90"
-# The put_call column is 'P' or '' (empty for calls) — unreliable, use sec_des suffix.
-# strike_px column is empty — strike is embedded in security_des.
+# Two CSV formats exist in the same file:
+#   Old: security_des="CTN6P    62", strike_px=""  (strike embedded in sec_des)
+#   New: security_des="CTN6P",       strike_px="83" (strike in its own column)
+# put_call column is 'P', 'C', or blank — unreliable; use security_des suffix instead.
 
-def parse_security_des(sec_des):
+def parse_security_des(sec_des, fallback_strike=None):
     """
-    'CTN6P    62'  -> {'ticker': 'CTN6', 'pc': 'Put',  'strike': 62.0}
-    'CTN6C    90'  -> {'ticker': 'CTN6', 'pc': 'Call', 'strike': 90.0}
+    Handles both CSV formats.
+    'CTN6P    62' or ('CTN6P', fallback_strike='83')
+      -> {'ticker': 'CTN6', 'pc': 'Put',  'strike': 62.0}
+    'CTN6C    90' or ('CTN6C', fallback_strike='90')
+      -> {'ticker': 'CTN6', 'pc': 'Call', 'strike': 90.0}
     Returns None on parse failure.
     """
     try:
         parts = sec_des.strip().split()
-        if len(parts) < 2:
+        if not parts:
             return None
-        raw    = parts[0]          # e.g. 'CTN6P' or 'CTN6C'
-        strike = float(parts[1])
+        raw = parts[0]  # e.g. 'CTN6P' or 'CTN6C'
+
         if raw.endswith('P'):
-            return {'ticker': raw[:-1], 'pc': 'Put',  'strike': strike}
-        if raw.endswith('C'):
-            return {'ticker': raw[:-1], 'pc': 'Call', 'strike': strike}
+            pc, ticker = 'Put', raw[:-1]
+        elif raw.endswith('C'):
+            pc, ticker = 'Call', raw[:-1]
+        else:
+            return None
+
+        # Strike: from security_des (old format) or from strike_px column (new format)
+        if len(parts) >= 2:
+            strike = float(parts[1])
+        elif fallback_strike not in (None, '', '0', 0):
+            strike = float(fallback_strike)
+        else:
+            return None
+
+        return {'ticker': ticker, 'pc': pc, 'strike': strike}
     except Exception:
         pass
     return None
@@ -152,7 +168,7 @@ def load_data():
     for r in opt_rows:
         if r.get('commodity', '').strip().upper() != 'CT':
             continue
-        parsed = parse_security_des(r.get('security_des', ''))
+        parsed = parse_security_des(r.get('security_des', ''), r.get('strike_px'))
         if not parsed:
             continue
         try:
