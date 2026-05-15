@@ -341,8 +341,38 @@ def load_data():
             entry = fut_lookup.get((std_m, std_y))
         if entry:
             futures[ticker]    = entry['settle']
-            # For DTE: prefer last_trade, fall back to first_notice
-            last_trade[ticker] = entry['last_trade'] or entry.get('first_notice')
+            # For DTE: prefer first_notice (options expiry proxy) over futures last_trade
+            last_trade[ticker] = entry.get('first_notice') or entry['last_trade']
+
+    # Override futures price with put-call parity implied forward from today's options.
+    # This corrects for any timing lag between options and futures CSV updates.
+    for ticker in expiry_list:
+        lt = last_trade.get(ticker)
+        if not lt:
+            continue
+        try:
+            dte_t = max(0, (datetime.strptime(lt, '%Y-%m-%d') -
+                            datetime.strptime(last_date, '%Y-%m-%d')).days)
+        except ValueError:
+            continue
+        if dte_t <= 0:
+            continue
+        T = dte_t / 365.0
+        by_strike = {}
+        for row in today_opts:
+            if row['ticker'] != ticker or row['px'] <= 0:
+                continue
+            k = row['strike']
+            if k not in by_strike:
+                by_strike[k] = {}
+            by_strike[k][row['pc']] = row['px']
+        implied_Fs = []
+        for k, pcs in by_strike.items():
+            if 'Call' in pcs and 'Put' in pcs:
+                implied_Fs.append(k + (pcs['Call'] - pcs['Put']) * math.exp(RISK_FREE * T))
+        if len(implied_Fs) >= 3:
+            implied_Fs.sort()
+            futures[ticker] = implied_Fs[len(implied_Fs) // 2]  # median
 
     # ATM strike per expiry
     atm_strike = {}
