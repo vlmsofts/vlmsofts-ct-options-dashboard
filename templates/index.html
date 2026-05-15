@@ -451,12 +451,12 @@ tr:hover td{background:var(--surf2)}
       </div>
       <div class="card">
         <div class="card-title">ATM IV History</div>
-        <canvas id="surf-chart" height="220"></canvas>
+        <div style="position:relative;height:220px"><canvas id="surf-chart"></canvas></div>
       </div>
     </div>
     <div class="card" style="margin-top:10px">
-      <div class="card-title">25Δ Skew History (Put IV − Call IV)</div>
-      <canvas id="skew-chart" height="160"></canvas>
+      <div class="card-title">25Δ Skew — Current (Put IV − Call IV)</div>
+      <div style="position:relative;height:160px"><canvas id="skew-chart"></canvas></div>
     </div>
   </div>
 </div>
@@ -984,7 +984,12 @@ function applyTemplate(name){
 function addLeg(type){
   const expiry = D.expiries[0]||'';
   if(type==='futures'){
-    addLegRaw({isFutures:true, expiry, ls:'LONG', lots:1, entryPx:D.futures[expiry]||0});
+    // Auto-compute delta-neutral lots from existing option legs
+    const gList = legs.map(leg=>computeGreeks(leg, null));
+    const netDelta = gList.reduce((s,g)=>s+(g?g.delta:0),0);
+    const lots = Math.max(1, Math.round(Math.abs(netDelta)));
+    const ls   = netDelta >= 0 ? 'SHORT' : 'LONG';
+    addLegRaw({isFutures:true, expiry, ls, lots, entryPx:getEffectiveFwd(expiry)||0});
   } else {
     const atm = D.atm_strike[expiry]||0;
     const px  = getChainPx(expiry, atm, 'Call')||0;
@@ -1154,12 +1159,12 @@ function _doRecompute(){
 }
 
 function renderGreekSummary(net){
-  const CONTRACT = 50000; // lbs
   const el = document.getElementById('greek-summary');
   if(!legs.length){ el.innerHTML='<div style="color:var(--muted);font-size:11px">Add legs to see Greeks</div>'; return; }
+  const optLots = legs.filter(l=>!l.isFutures).reduce((s,l)=>s+l.lots,0);
   const totalLots = legs.reduce((s,l)=>s+l.lots,0);
-  const thetaDollar = net.theta * CONTRACT * totalLots / 100;
-  const vegaDollar  = net.vega  * CONTRACT * totalLots / 100;
+  const thetaTotal = net.theta * optLots;
+  const vegaTotal  = net.vega  * optLots;
 
   el.innerHTML = `
     <div style="font-size:10px;color:var(--muted);margin-bottom:8px">NET GREEKS — ${totalLots} lots basis</div>
@@ -1167,28 +1172,28 @@ function renderGreekSummary(net){
       <span class="greek-sym">Δ</span>
       <div>
         <div class="greek-val ${clr(net.delta)}">${fmt4(net.delta)}</div>
-        <div class="greek-sub">${(net.delta*50000).toFixed(0)} lbs fut equiv</div>
+        <div class="greek-sub">${net.delta>=0?'+':''}${(net.delta*optLots).toFixed(2)}¢ total exposure</div>
       </div>
     </div>
     <div class="greek-row">
       <span class="greek-sym">Γ</span>
       <div>
         <div class="greek-val">${fmt4(net.gamma)}</div>
-        <div class="greek-sub">+${fmt4(net.gamma)}¢ per 1¢ move</div>
+        <div class="greek-sub">${net.gamma>=0?'+':''}${(net.gamma*optLots).toFixed(3)}¢ per 1¢ move</div>
       </div>
     </div>
     <div class="greek-row">
       <span class="greek-sym">Θ</span>
       <div>
         <div class="greek-val ${clr(-net.theta)}">${fmt4(net.theta)}¢/day</div>
-        <div class="greek-sub">${thetaDollar>=0?'+':''}$${Math.abs(thetaDollar).toFixed(0)}/day total</div>
+        <div class="greek-sub">${thetaTotal>=0?'+':''}${thetaTotal.toFixed(3)}¢/day (${optLots} opt lots)</div>
       </div>
     </div>
     <div class="greek-row">
       <span class="greek-sym">ν</span>
       <div>
         <div class="greek-val ${clr(net.vega)}">${fmt4(net.vega)}¢/vol pt</div>
-        <div class="greek-sub">${vegaDollar>=0?'+':''}$${Math.abs(vegaDollar).toFixed(0)} per 1 vol pt</div>
+        <div class="greek-sub">${vegaTotal>=0?'+':''}${vegaTotal.toFixed(3)}¢ per 1 vol pt</div>
       </div>
     </div>`;
 }
@@ -1230,7 +1235,7 @@ function renderLegGreeksTable(gList){
 }
 
 // ── Scenario grid ─────────────────────────────────────────────────────────────
-const PRICE_SHIFTS = [-8,-6,-4,-2,0,2,4,6,8];
+const PRICE_SHIFTS = [-8,-7,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6,7,8];
 const VOL_SHIFTS   = [-4,-2,0,2,4];
 let scenModeVal = 'today';
 
@@ -1294,7 +1299,8 @@ function renderScenarioGrid(dteOverrideVal){
   const volHdr = ['<tr><th>Price \\ Vol</th>',
     ...VOL_SHIFTS.map(v=>`<th>${v>=0?'+':''}${v} vol</th>`),'</tr>'].join('');
 
-  const dataRows = PRICE_SHIFTS.map((dF,pi)=>{
+  const dataRows = [...PRICE_SHIFTS].reverse().map((dF)=>{
+    const pi = PRICE_SHIFTS.indexOf(dF);
     const isFlat = dF===0;
     const rowCells = VOL_SHIFTS.map((dV,vi)=>{
       const v = cells[pi][vi];
@@ -1365,11 +1371,7 @@ function addNeutralHedge(){
 }
 
 // ── Vol Surface panel ─────────────────────────────────────────────────────────
-let surfLoaded = false;
 function loadSurface(){
-  if(surfLoaded) return;
-  surfLoaded = true;
-
   const r = getRFR();
 
   // Build surface table: rows = expiries, cols = delta buckets
@@ -1382,6 +1384,7 @@ function loadSurface(){
   ];
 
   const tbody = document.getElementById('surf-tbody');
+  tbody.innerHTML = '';
   const atmHistory = {};  // ticker -> [{date, iv}]
 
   for(const ticker of D.expiries){
@@ -1429,21 +1432,23 @@ function loadSurface(){
   // ATM IV history chart (just use atm_iv values per expiry as a bar)
   const ctxS = document.getElementById('surf-chart').getContext('2d');
   const colors = ['#E8C547','#3b82f6','#22c55e','#ef4444','#a855f7'];
-  const atmDatasets = D.expiries.map((e,i)=>({
-    label: e,
-    data: [D.atm_iv[e]||null],
-    backgroundColor: colors[i%colors.length]+'99',
-    borderColor: colors[i%colors.length],
-    borderWidth:2,
-  }));
   if(surfChart) surfChart.destroy();
   surfChart = new Chart(ctxS,{
     type:'bar',
-    data:{labels:['Current ATM IV'], datasets:atmDatasets},
+    data:{
+      labels: D.expiries,
+      datasets:[{
+        label:'ATM IV',
+        data: D.expiries.map(e=>D.atm_iv[e]||null),
+        backgroundColor: D.expiries.map((_,i)=>colors[i%colors.length]+'99'),
+        borderColor:     D.expiries.map((_,i)=>colors[i%colors.length]),
+        borderWidth:2,
+      }]
+    },
     options:{
       animation:false,
       responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{labels:{color:'#94a3b8',font:{size:10}}}},
+      plugins:{legend:{display:false}},
       scales:{
         x:{ticks:{color:'#94a3b8'},grid:{color:'#1e2a3a'}},
         y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'#1e2a3a'},
