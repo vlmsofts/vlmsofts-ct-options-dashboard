@@ -11,6 +11,15 @@ MONTH_CODE = {'F':1,'G':2,'H':3,'J':4,'K':5,'M':6,'N':7,'Q':8,'U':9,'V':10,'X':1
 MONTH_NAME = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
               7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
 
+# Futures generic ticker suffix (e.g. CTJUL1 -> month 7)
+FUTURES_MONTH_SUFFIX = {
+    1:'JAN',2:'FEB',3:'MAR',4:'APR',5:'MAY',6:'JUN',
+    7:'JUL',8:'AUG',9:'SEP',10:'OCT',11:'NOV',12:'DEC',
+}
+FUTURES_MONTH_FROM_SUFFIX = {v: k for k, v in FUTURES_MONTH_SUFFIX.items()}
+# Cotton only has futures for these months; serial month options map to the next one
+CT_STANDARD_MONTHS = (3, 5, 7, 10, 12)
+
 _cache = {}
 CACHE_TTL = 300
 RISK_FREE  = 0.045
@@ -147,6 +156,52 @@ def parse_ct_ticker(ticker):
         return None
     return code, 2020 + year_digit, MONTH_CODE[code]
 
+def parse_futures_my(contract, date_s):
+    """
+    'CTJUL1', '2025-01-02' -> (month=7, year=2025)
+    'CTJUL2', '2025-01-02' -> (month=7, year=2026)
+    Uses ordinal numbering: ordinal 1 = nearest upcoming occurrence of that month.
+    Returns None on failure.
+    """
+    if not contract or not contract.startswith('CT') or len(contract) < 6:
+        return None
+    suffix  = contract[2:5].upper()
+    ord_str = contract[5:]
+    month_num = FUTURES_MONTH_FROM_SUFFIX.get(suffix)
+    if not month_num:
+        return None
+    try:
+        ordinal = int(ord_str)
+    except (ValueError, TypeError):
+        return None
+    try:
+        d = datetime.strptime(date_s, '%Y-%m-%d')
+    except ValueError:
+        return None
+    first_year = d.year if d.month <= month_num else d.year + 1
+    return month_num, first_year + (ordinal - 1)
+
+
+# Explicit anchor for CT serial month options -> underlying standard futures month
+CT_SERIAL_FUTURES = {
+    1: 3,   # Jan -> Mar
+    2: 3,   # Feb -> Mar
+    4: 5,   # Apr -> May
+    6: 7,   # Jun -> Jul
+    8: 10,  # Aug -> Oct
+    9: 12,  # Sep -> Dec
+    11: 12, # Nov -> Dec
+}
+
+def next_standard_month(month_num, year):
+    """Map a serial CT month to its anchor standard futures month."""
+    std_m = CT_SERIAL_FUTURES.get(month_num)
+    if std_m:
+        return std_m, year
+    # Already a standard month — shouldn't be called, but safe fallback
+    return month_num, year
+
+
 def ticker_label(ticker):
     p = parse_ct_ticker(ticker)
     if not p:
@@ -206,25 +261,57 @@ def load_data():
         default=prev_date
     )
 
-    # Futures lookup: (month_num, year) -> {settle, last_trade}
-    fut_lookup = {}
+    # generic_settle['CTJUL1']['2025-01-03'] = 69.89  — every row, no filtering
+    generic_settle = {}
     for row in ct_fut:
-        lt_str = (row.get('last_trade') or '').strip()
-        settle = (row.get('settle')     or '').strip()
-        date_s = (row.get('date')       or '').strip()
-        if not lt_str or not settle or not date_s:
+        contract = (row.get('contract') or '').strip()
+        settle_s = (row.get('settle')   or '').strip()
+        date_s   = (row.get('date')     or '').strip()
+        if not contract or not settle_s or not date_s:
             continue
         try:
-            lt_dt = datetime.strptime(lt_str, '%Y-%m-%d')
-            key   = (lt_dt.month, lt_dt.year)
-            if key not in fut_lookup or date_s > fut_lookup[key]['date']:
-                fut_lookup[key] = {
-                    'settle':     float(settle),
-                    'last_trade': lt_str,
-                    'date':       date_s,
-                }
+            val = float(settle_s)
         except (ValueError, TypeError):
             continue
+        if contract not in generic_settle:
+            generic_settle[contract] = {}
+        generic_settle[contract][date_s] = val
+
+    # Futures lookup: (month_num, year) -> {settle, last_trade, first_notice}
+    # Uses last_trade when available (accurate); falls back to ordinal parsing.
+    fut_lookup = {}
+    for row in ct_fut:
+        contract = (row.get('contract')     or '').strip()
+        lt_str   = (row.get('last_trade')   or '').strip()
+        fn_str   = (row.get('first_notice') or '').strip()
+        settle_s = (row.get('settle')       or '').strip()
+        date_s   = (row.get('date')         or '').strip()
+        if not contract or not settle_s or not date_s:
+            continue
+        key = None
+        if lt_str:
+            try:
+                lt_dt = datetime.strptime(lt_str, '%Y-%m-%d')
+                key = (lt_dt.month, lt_dt.year)
+            except ValueError:
+                pass
+        if key is None:
+            result = parse_futures_my(contract, date_s)
+            if result:
+                key = result
+        if key is None:
+            continue
+        try:
+            settle_f = float(settle_s)
+        except (ValueError, TypeError):
+            continue
+        if key not in fut_lookup or date_s > fut_lookup[key]['date']:
+            fut_lookup[key] = {
+                'settle':       settle_f,
+                'last_trade':   lt_str or None,
+                'first_notice': fn_str or None,
+                'date':         date_s,
+            }
 
     # Active expiries from today's data (base tickers: CTN6, CTZ6 etc.)
     today_opts = [r for r in ct_opts if r['date'] == last_date]
@@ -247,9 +334,15 @@ def load_data():
         _, year, month_num = seen[ticker]
         expiry_labels[ticker] = ticker_label(ticker)
         key = (month_num, year)
-        if key in fut_lookup:
-            futures[ticker]    = fut_lookup[key]['settle']
-            last_trade[ticker] = fut_lookup[key]['last_trade']
+        entry = fut_lookup.get(key)
+        if entry is None and month_num not in CT_STANDARD_MONTHS:
+            # Serial month: use next standard CT futures month as the underlying
+            std_m, std_y = next_standard_month(month_num, year)
+            entry = fut_lookup.get((std_m, std_y))
+        if entry:
+            futures[ticker]    = entry['settle']
+            # For DTE: prefer last_trade, fall back to first_notice
+            last_trade[ticker] = entry['last_trade'] or entry.get('first_notice')
 
     # ATM strike per expiry
     atm_strike = {}
@@ -316,25 +409,69 @@ def load_data():
             atm_iv_1w_chg[ticker] = round((iv_t - iv_w) * 100, 2)
 
     # ── IV Percentile ─────────────────────────────────────────────────────────
+    # Uses per-date historical forward (from generic_settle) + per-date ATM strike
+    # so history is accurate regardless of today's price level.
+
+    def get_hist_fwd(month_num, year, date_str):
+        """
+        Look up the historical futures settle for (month_num, year) on date_str
+        using generic contract tickers (CTJUL1, CTMAR1 etc.).
+        Serial CT months are mapped to the next standard futures month.
+        """
+        std_m, std_y = (month_num, year) if month_num in CT_STANDARD_MONTHS \
+                       else next_standard_month(month_num, year)
+        try:
+            d = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return None
+        first_year = d.year if d.month <= std_m else d.year + 1
+        ordinal = std_y - first_year + 1
+        if ordinal < 1 or ordinal > 3:
+            return None
+        suffix   = FUTURES_MONTH_SUFFIX.get(std_m)
+        contract = f'CT{suffix}{ordinal}'
+        return generic_settle.get(contract, {}).get(date_str)
+
     iv_percentile  = {}
     history_months = {}
 
+    # Pre-group options by (ticker, date) to avoid repeated full-list scans
+    opts_by_ticker_date = {}
+    for row in ct_opts:
+        key = (row['ticker'], row['date'])
+        if key not in opts_by_ticker_date:
+            opts_by_ticker_date[key] = []
+        opts_by_ticker_date[key].append(row)
+
     for ticker in expiry_list:
-        atm     = atm_strike.get(ticker)
-        fwd     = futures.get(ticker)
-        iv_pct  = atm_iv.get(ticker)
-        if atm is None or fwd is None or iv_pct is None:
+        iv_pct = atm_iv.get(ticker)
+        if iv_pct is None:
             continue
+        p = parse_ct_ticker(ticker)
+        if not p:
+            continue
+        _, t_year, t_month = p
 
         date_ivs = {}
-        for row in ct_opts:
-            d = row['date']
-            if row['ticker'] != ticker or abs(row['strike'] - atm) > 0.01 or d in date_ivs:
+        for d in all_dates:
+            rows_d = opts_by_ticker_date.get((ticker, d), [])
+            if not rows_d:
                 continue
-            dte = get_dte(ticker, d)
-            iv  = solve_iv(row, fwd, dte)
-            if iv is not None:
-                date_ivs[d] = iv * 100
+            fwd_d = get_hist_fwd(t_month, t_year, d)
+            if not fwd_d:
+                continue
+            strikes_d = set(r['strike'] for r in rows_d)
+            atm_d = min(strikes_d, key=lambda k: abs(k - fwd_d))
+            dte_d = get_dte(ticker, d)
+            for pc in ('Call', 'Put'):
+                for row in rows_d:
+                    if row['pc'] == pc and abs(row['strike'] - atm_d) < 0.01:
+                        iv = solve_iv(row, fwd_d, dte_d)
+                        if iv is not None:
+                            date_ivs[d] = iv * 100
+                            break
+                if d in date_ivs:
+                    break
 
         if len(date_ivs) < 2:
             continue
