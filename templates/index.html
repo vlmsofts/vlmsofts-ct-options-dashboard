@@ -623,7 +623,7 @@ function getDTE(ticker, refDate){
   return Math.max(0, Math.round((d1-d0)/(1000*60*60*24)));
 }
 function getChainPx(ticker, strike, pc){
-  const rows = D.options_today.filter(r=>r.ticker===ticker&&r.put_call===pc
+  const rows = D.options_today.filter(r=>r.ticker===ticker&&r.pc===pc
     &&Math.abs(r.strike-strike)<0.01);
   return rows.length ? rows[0].px : null;
 }
@@ -751,8 +751,8 @@ function buildSmileData(ticker, dateSet){
   const callIVs = [], putIVs = [];
 
   for(const k of strikes){
-    const callRow = rows.find(r=>r.put_call==='Call'&&Math.abs(r.strike-k)<0.01);
-    const putRow  = rows.find(r=>r.put_call==='Put' &&Math.abs(r.strike-k)<0.01);
+    const callRow = rows.find(r=>r.pc==='Call'&&Math.abs(r.strike-k)<0.01);
+    const putRow  = rows.find(r=>r.pc==='Put' &&Math.abs(r.strike-k)<0.01);
 
     const cIV = callRow&&callRow.px>0&&T>0 ?
       Black76.impliedVol(callRow.px,F,k,T,r,true) : null;
@@ -821,8 +821,8 @@ function renderSmile(){
     const pc = today.putIVs[i]!=null&&prev2.putIVs[i]!=null  ? today.putIVs[i]-prev2.putIVs[i]   : null;
     const todayRow = D.options_today.filter(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01);
     const prevRow  = D.options_prev.filter(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01);
-    const coiC = todayRow.find(r=>r.put_call==='Call'), coiP = todayRow.find(r=>r.put_call==='Put');
-    const poiC = prevRow.find(r=>r.put_call==='Call'),  poiP = prevRow.find(r=>r.put_call==='Put');
+    const coiC = todayRow.find(r=>r.pc==='Call'), coiP = todayRow.find(r=>r.pc==='Put');
+    const poiC = prevRow.find(r=>r.pc==='Call'),  poiP = prevRow.find(r=>r.pc==='Put');
     return {
       k, cc, pc,
       coiChg: coiC&&poiC ? coiC.oi-poiC.oi : null,
@@ -1392,7 +1392,8 @@ function loadSurface(){
     function findDeltaStrike(targetDelta, isCall){
       let bestK=atm, bestDiff=Infinity;
       for(const k of avail){
-        const mkt   = getChainPx(ticker,k,isCall?'Call':'Put');
+        const pcStr = isCall?'Call':'Put';
+        const mkt   = getChainPx(ticker,k,pcStr);
         const sigma = mkt&&T>0 ? (Black76.impliedVol(mkt,F,k,T,r,isCall)||sigmaGuess) : sigmaGuess;
         const d     = Black76.delta(F,k,T,r,sigma,isCall);
         const diff  = Math.abs(d - targetDelta);
