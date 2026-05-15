@@ -516,7 +516,7 @@ const Black76 = {
                   : df*(K*this.normCDF(-d2)-F*this.normCDF(-d1));
   },
   impliedVol(mkt,F,K,T,r,isCall){
-    if(T<=0||mkt<=0) return null;
+    if(T<=0||mkt<=0||mkt<0.04) return null;
     const intr=Math.max(0,isCall?F-K:K-F);
     if(mkt<=intr*0.999) return null;
     let sigma=0.20;
@@ -1002,11 +1002,17 @@ function removeLeg(id){
   recomputeAll();
 }
 
+function getEffectiveFwd(expiry){
+  // Prefer user-entered futures leg price over system-derived forward
+  const futLeg = legs.find(l=>l.isFutures && l.expiry===expiry && l.entryPx>0);
+  return futLeg ? futLeg.entryPx : (D.futures[expiry]||0);
+}
+
 function renderLegs(){
   const tbody = document.getElementById('leg-tbody');
   tbody.innerHTML = legs.map((leg,i)=>{
     const expOpts = D.expiries.map(e=>`<option value="${e}"${e===leg.expiry?'selected':''}>${e}</option>`).join('');
-    const F   = D.futures[leg.expiry]||0;
+    const F   = getEffectiveFwd(leg.expiry);
     const otmf = leg.isFutures||!leg.strike||!F ? '—'
       : (Math.abs(leg.strike - F)/F*100).toFixed(2)+'%';
     if(leg.isFutures){
@@ -1049,7 +1055,7 @@ function renderLegs(){
   const fwdDiv = document.getElementById('fwd-overrides');
   fwdDiv.innerHTML = expiries_in_legs.map(e=>`
     <div style="font-size:11px;color:var(--dim);">${e} Forward:
-      <input type="number" id="fwd-${e}" value="${(D.futures[e]||0).toFixed(2)}" step="0.01"
+      <input type="number" id="fwd-${e}" value="${getEffectiveFwd(e).toFixed(2)}" step="0.01"
         style="width:75px;background:var(--surf2);border:1px solid var(--bord2);
                color:var(--text);padding:2px 5px;border-radius:3px;font-size:11px;margin-left:6px"
         onchange="recomputeAll()">
@@ -1104,7 +1110,8 @@ function legToggle(id, field, opts){
 // ── Greeks computation ────────────────────────────────────────────────────────
 function getFwdOverride(expiry){
   const el = document.getElementById('fwd-'+expiry);
-  return el ? parseFloat(el.value)||D.futures[expiry]||0 : (D.futures[expiry]||0);
+  if(el){ const v=parseFloat(el.value); if(v>0) return v; }
+  return getEffectiveFwd(expiry);
 }
 
 function computeGreeks(leg, dteOv){
@@ -1434,6 +1441,7 @@ function loadSurface(){
     type:'bar',
     data:{labels:['Current ATM IV'], datasets:atmDatasets},
     options:{
+      animation:false,
       responsive:true,maintainAspectRatio:false,
       plugins:{legend:{labels:{color:'#94a3b8',font:{size:10}}}},
       scales:{
@@ -1461,6 +1469,7 @@ function loadSurface(){
       }]
     },
     options:{
+      animation:false,
       responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false}},
       scales:{
