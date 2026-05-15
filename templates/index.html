@@ -522,7 +522,7 @@ const Black76 = {
     let sigma=0.20;
     for(let i=0;i<100;i++){
       const p=this.price(F,K,T,r,sigma,isCall);
-      const v=this.vega(F,K,T,r,sigma);
+      const v=this.vega(F,K,T,r,sigma)*100; // vega() is per 1%-vol; solver needs per-unit-sigma
       if(v<1e-10) break;
       const diff=p-mkt;
       if(Math.abs(diff)<1e-8) break;
