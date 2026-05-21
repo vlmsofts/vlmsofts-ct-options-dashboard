@@ -2,6 +2,36 @@
 
 ---
 
+## PHASE 1: ICE RTD AS PRIMARY LIVE SOURCE + DAILY SETTLE PERSISTENCE (2026-05-21)
+
+### [✅] ICE RTD wired as primary; Bloomberg RTD inactive fallback
+
+**Files:** `app.py`, `ice_rtd_reader.py`
+
+**What changed:**
+- `ice_rtd_reader.py` — added COM thread-safety wrapper (`pythoncom.CoInitialize/CoUninitialize`)
+  around the public entry point so xlwings calls are safe from Flask worker threads.
+- `app.py` imports `ice_rtd_reader` at startup. `_ice_to_rtd_shape()` adapter converts the
+  `{'mode', 'futures', 'options'}` dict to the same shape `rtd_reader.read_live()` returned,
+  so all downstream IV/greeks logic is unchanged.
+- `load_data('CT')` and `/api/debug` now try ICE RTD first; `rtd_reader` (Bloomberg) is the
+  inactive fallback only called when ICE workbook is unavailable.
+
+**Daily settle persistence (Bloomberg-free going forward):**
+- `_persist_ct_options_ice(ice_data, today_str)` — writes CT option rows using the *new* CSV
+  format (`security_des='CTN6C'`, `strike_px=82.5`) to `local_options_history.csv`.
+- `_persist_generic_options_ice(...)` — same for KC/SB/CC to their respective CSVs.
+- `_persist_futures_ice(...)` — writes ordinal contract rows (`CTJUL1`) derived from ICE contract
+  codes using the exact same formula as `get_hist_fwd`. Copies `last_trade`/`first_notice` from
+  existing CSV rows via `_build_lt_fn_lookup`. All functions are idempotent (skip if date exists).
+- `_persist_ice_all()` — orchestrates all 4 commodities, clears skew-history cache after write.
+- Auto-scheduler: `threading.Timer` fires at **20:45 local** (= 15:45 ET / BST-adjusted) daily,
+  reschedules itself. Daemon thread — does not prevent server shutdown.
+- `POST /api/fetch-settles` — manual trigger; returns `{'status': 'ok', 'results': {...}}` keyed
+  by commodity with row counts or `'unavailable'`/`'error: ...'` strings.
+
+---
+
 ## ICE RTD PIPELINE + BLOOMBERG HISTORICAL NORMALISATION (2026-05-21)
 
 ### [✅] ICE RTD reader for CT (parallel pipeline, existing CT unchanged)
