@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CT Options Analytics — VLM Commodities</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 <style>
 :root {
   --bg:    #0b0f1a;
@@ -41,7 +41,18 @@ a{color:var(--acc)}
   border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.03em;
 }
 .btn-export:hover{opacity:.85}
+.btn-exp-panel{
+  background:var(--surf2);border:1px solid var(--bord2);color:var(--acc);
+  padding:4px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;
+  margin-left:auto;white-space:nowrap;
+}
+.btn-exp-panel:hover{background:var(--acc);color:#000;border-color:var(--acc);}
 #data-date{color:var(--dim);font-size:11px}
+#commod-sel{
+  background:var(--surf2);border:1px solid var(--bord2);color:var(--acc);
+  padding:4px 8px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;
+}
+#commod-sel:hover{border-color:var(--acc)}
 
 /* ── Intelligence header strip ── */
 #intel-strip{
@@ -219,6 +230,44 @@ tr:hover td{background:var(--surf2)}
 }
 .btn-gen:hover{opacity:.85}
 
+/* ── Skew History ── */
+.skew-chart-wrap{position:relative;cursor:pointer}
+.skew-chart-wrap:hover::after{
+  content:'⛶';position:absolute;top:6px;right:8px;
+  font-size:16px;color:var(--acc);opacity:.75;pointer-events:none;
+}
+#skew-expand-overlay{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);
+  z-index:500;align-items:center;justify-content:center;
+}
+#skew-expand-overlay.open{display:flex}
+#skew-expand-box{
+  background:var(--surf);border:1px solid var(--bord2);border-radius:8px;
+  padding:16px 20px;width:90vw;height:84vh;display:flex;flex-direction:column;
+}
+#skew-expand-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+#skew-expand-title{color:var(--acc);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+#skew-expand-close{background:none;border:none;color:var(--dim);font-size:20px;cursor:pointer;line-height:1}
+#skew-expand-close:hover{color:var(--text)}
+#skew-expand-chart-wrap{flex:1;position:relative;min-height:0}
+#skew-expand-canvas{width:100%;height:100%}
+#skew-export-modal{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);
+  z-index:200;align-items:center;justify-content:center;
+}
+#skew-export-modal.open{display:flex}
+.skew-exp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.skew-exp-tile{
+  background:var(--surf2);border:2px solid var(--bord2);border-radius:6px;
+  padding:14px 12px;cursor:pointer;text-align:center;user-select:none;
+  transition:border-color .15s,background .15s;
+}
+.skew-exp-tile:hover{border-color:var(--dim)}
+.skew-exp-tile.sel{border-color:var(--acc);background:#1c1800}
+.skew-exp-tile .etlbl{font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px}
+.skew-exp-tile .etsub{font-size:11px;color:var(--dim)}
+.skew-exp-tile.sel .etlbl{color:var(--acc)}
+
 /* hidden export canvas */
 #export-stage{
   position:fixed;left:-9999px;top:0;width:1200px;
@@ -232,28 +281,77 @@ tr:hover td{background:var(--surf2)}
   border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .error-box{background:#2a1010;border:1px solid var(--red);border-radius:5px;padding:12px;color:var(--red)}
+
+/* ── Data source badge ── */
+.src-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:10px;letter-spacing:.05em;margin-right:4px}
+.src-live{background:#0d3a1e;color:#22c55e;border:1px solid #22c55e}
+.src-xlsx{background:#3a2a00;color:#E8C547;border:1px solid #E8C547}
+.src-csv{background:var(--surf2);color:var(--muted);border:1px solid var(--bord2)}
+
+/* ── Live futures bar ── */
+#futures-bar{
+  background:#0a0e18;border-bottom:1px solid var(--bord);
+  display:flex;overflow-x:auto;padding:0 8px;
+}
+#futures-bar:empty{display:none}
+.fut-tile{
+  display:flex;align-items:center;gap:10px;padding:6px 14px;
+  border-right:1px solid var(--bord);white-space:nowrap;flex-shrink:0;
+}
+.fut-ticker{font-size:11px;font-weight:700;color:var(--acc);min-width:44px}
+.fut-px{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
+.fut-chg{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.fut-meta{font-size:10px;color:var(--dim);line-height:1.5}
+.fut-meta-col{display:flex;flex-direction:column}
+
+/* ── Vol smile range controls ── */
+.range-ctrl{display:flex;align-items:center;gap:5px;margin-left:auto}
+.range-ctrl label{font-size:10px;color:var(--muted)}
+.range-inp{
+  width:58px;background:var(--surf2);border:1px solid var(--bord2);
+  color:var(--text);padding:3px 5px;border-radius:3px;font-size:11px;
+}
+
+/* ── Greeks — bigger for clarity ── */
+.greek-sym{font-size:18px;font-weight:700;color:var(--acc);min-width:30px}
+.greek-val{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.greek-sub{font-size:11px;color:var(--dim);text-align:right;margin-top:2px}
 </style>
 </head>
 <body>
 
 <!-- ── Top bar ── -->
 <div id="topbar">
-  <div class="brand">VLM COMMODITIES <span>CT Options Analytics</span></div>
+  <div class="brand">VLM COMMODITIES <span id="commod-title">CT Options Analytics</span></div>
   <div class="right">
+    <select id="commod-sel" title="Switch commodity">
+      <option value="CT">CT — Cotton</option>
+      <option value="KC">KC — Coffee</option>
+      <option value="SB">SB — Sugar</option>
+      <option value="CC">CC — Cocoa</option>
+    </select>
+    <span id="src-badge" class="src-badge src-csv">CSV</span>
     <span id="data-date"></span>
-    <button class="btn-export" onclick="openExport()">&#x1F4F7; EXPORT SNAPSHOT</button>
+    <button class="btn-export" onclick="openExport()">&#x1F4F7; EXPORT</button>
   </div>
 </div>
+
+<!-- ── Live Futures Bar (RTD only) ── -->
+<div id="futures-bar"></div>
 
 <!-- ── Daily Intelligence Strip ── -->
 <div id="intel-strip">
   <!-- ATM IV -->
   <div class="intel-tile">
-    <div class="label">ATM Implied Vol
-      <select id="hdr-expiry" onchange="updateHeader()"></select>
-    </div>
+    <div class="label">ATM Implied Vol</div>
     <div class="big" id="hdr-iv">—</div>
-    <div class="sub" id="hdr-iv-label">Select expiry</div>
+    <div class="sub" id="hdr-iv-label">—</div>
+  </div>
+  <!-- ATM Straddle -->
+  <div class="intel-tile">
+    <div class="label">ATM Straddle</div>
+    <div class="big" id="hdr-straddle" style="font-size:20px">—</div>
+    <div class="sub" id="hdr-straddle-sub">—</div>
   </div>
   <!-- IV Change -->
   <div class="intel-tile">
@@ -292,39 +390,52 @@ tr:hover td{background:var(--surf2)}
   <div class="tab active" onclick="switchTab('smile')">Vol Smile</div>
   <div class="tab" onclick="switchTab('trade')">Trade Analyzer</div>
   <div class="tab" onclick="switchTab('surface')">Vol Surface</div>
+  <div class="tab" onclick="switchTab('skew')">Skew History</div>
 </div>
 
 <!-- ══════════════════════════ PANEL: VOL SMILE ══════════════════════════ -->
 <div id="panel-smile" class="panel active">
   <div class="ctrl-bar">
-    <select id="smile-expiry" onchange="renderSmile()"></select>
+    <select id="smile-expiry" onchange="smileExpChange()"></select>
     <div class="pill-grp" id="smile-overlay-pills">
       <div class="pill active" data-ov="today" onclick="toggleOverlay(this)">TODAY</div>
-      <div class="pill" data-ov="prev"  onclick="toggleOverlay(this)">+ YESTERDAY</div>
-      <div class="pill" data-ov="week"  onclick="toggleOverlay(this)">+ LAST WEEK</div>
+      <div class="pill" data-ov="prev"  onclick="toggleOverlay(this)">+YEST</div>
+      <div class="pill" data-ov="week"  onclick="toggleOverlay(this)">+1WK</div>
     </div>
     <div class="pill-grp" id="smile-type-pills">
       <div class="pill active" data-ct="smile" onclick="setChartType(this,'smile')">SMILE</div>
-      <div class="pill"        data-ct="chg"   onclick="setChartType(this,'chg')">IV CHANGE</div>
+      <div class="pill"        data-ct="chg"   onclick="setChartType(this,'chg')">IV CHG</div>
     </div>
+    <div class="range-ctrl">
+      <label>Strikes:</label>
+      <input type="number" id="smile-min" class="range-inp" step="1" placeholder="Min" oninput="renderSmile()">
+      <span style="color:var(--muted);font-size:11px">–</span>
+      <input type="number" id="smile-max" class="range-inp" step="1" placeholder="Max" oninput="renderSmile()">
+    </div>
+    <button class="btn-exp-panel" onclick="openExport()" title="Export PNG">&#128247; PNG</button>
   </div>
   <div class="card" style="padding:10px">
-    <canvas id="smile-chart" height="260"></canvas>
+    <div style="position:relative;height:300px">
+      <canvas id="smile-chart"></canvas>
+    </div>
   </div>
+  <!-- ATM Greeks strip -->
+  <div id="atm-greeks-strip" style="
+    display:flex;gap:0;background:var(--surf2);border:1px solid var(--bord2);
+    border-radius:5px;margin-top:10px;overflow:hidden;font-variant-numeric:tabular-nums">
+  </div>
+
   <div class="card" style="margin-top:10px">
-    <div class="card-title">Top 5 Strikes by IV Change</div>
-    <table id="smile-chg-table">
-      <thead><tr>
-        <th>Strike</th><th class="num">Call IV Chg</th><th class="num">Put IV Chg</th>
-        <th class="num">Call OI Chg</th><th class="num">Put OI Chg</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
+    <div class="card-title">Top 15 Strikes by IV Change</div>
+    <div id="smile-chg-container" style="display:flex;gap:8px"></div>
   </div>
 </div>
 
 <!-- ══════════════════════════ PANEL: TRADE ANALYZER ══════════════════════════ -->
 <div id="panel-trade" class="panel">
+  <div class="ctrl-bar" style="margin-bottom:10px;justify-content:flex-end">
+    <button class="btn-exp-panel" onclick="exportTradePanel()" title="Export PNG">&#128247; PNG</button>
+  </div>
   <div class="trade-layout">
     <!-- LEFT: Trade Builder -->
     <div class="trade-left">
@@ -435,6 +546,10 @@ tr:hover td{background:var(--surf2)}
 
 <!-- ══════════════════════════ PANEL: VOL SURFACE ══════════════════════════ -->
 <div id="panel-surface" class="panel">
+  <div class="ctrl-bar" style="margin-bottom:10px">
+    <select id="surface-expiry" onchange="surfaceExpChange()"></select>
+    <button class="btn-exp-panel" onclick="exportSurfacePanel()" title="Export PNG">&#128247; PNG</button>
+  </div>
   <div id="surface-loading" style="color:var(--dim);padding:20px">Loading surface data…</div>
   <div id="surface-content" style="display:none">
     <div class="surf-grid">
@@ -443,21 +558,116 @@ tr:hover td{background:var(--surf2)}
         <div style="overflow-x:auto">
           <table class="surf-table" id="surf-table">
             <thead><tr>
-              <th>Expiry</th><th>10Δ Put</th><th>25Δ Put</th><th>ATM</th><th>25Δ Call</th><th>10Δ Call</th>
+              <th>Expiry</th><th>10Δ Put</th><th>15Δ Put</th><th>25Δ Put</th><th>35Δ Put</th><th>ATM</th><th>35Δ Call</th><th>25Δ Call</th><th>15Δ Call</th><th>10Δ Call</th>
+              <th style="border-left:1px solid var(--bord2)">HV10</th><th>HV30</th><th>HV60</th><th>HV90</th>
             </tr></thead>
             <tbody id="surf-tbody"></tbody>
           </table>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-title">ATM IV History</div>
-        <div style="position:relative;height:220px"><canvas id="surf-chart"></canvas></div>
       </div>
     </div>
     <div class="card" style="margin-top:10px">
       <div class="card-title">25Δ Skew — Current (Put IV − Call IV)</div>
       <div style="position:relative;height:160px"><canvas id="skew-chart"></canvas></div>
     </div>
+    <!-- Multi-expiry smile — Bloomberg OVDV Skew-style -->
+    <div class="card" style="margin-top:10px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div class="card-title" style="margin:0">Multi-Expiry Vol Smile</div>
+        <div class="pill-grp">
+          <div class="pill active" id="mes-abs"  onclick="setMESMode('abs',this)">STRIKE</div>
+          <div class="pill"        id="mes-mono" onclick="setMESMode('mono',this)">MONEYNESS</div>
+        </div>
+      </div>
+      <div style="position:relative;height:340px"><canvas id="mes-chart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ PANEL: SKEW HISTORY ══════════════════════════ -->
+<div id="panel-skew" class="panel">
+  <div class="ctrl-bar" style="margin-bottom:10px;gap:8px;flex-wrap:wrap">
+    <span style="color:var(--acc);font-size:12px;font-weight:700;letter-spacing:.04em">SKEW HISTORY</span>
+    <div class="pill-grp" id="skew-ticker-pills" style="flex-wrap:wrap"></div>
+    <span id="skew-hist-status" style="color:var(--dim);font-size:11px;margin-left:4px"></span>
+    <button class="btn-exp-panel" style="margin-left:auto" onclick="openSkewExport()" title="Export PNGs">&#128247; PNG</button>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span>ATM IV</span>
+        <span style="color:var(--muted);cursor:pointer;font-size:15px;line-height:1;transition:color .15s"
+              onmouseenter="this.style.color='var(--acc)'" onmouseleave="this.style.color='var(--muted)'"
+              onclick="expandSkewChart('atm','ATM IV')" title="Expand">&#x26F6;</span>
+      </div>
+      <div class="skew-chart-wrap" onclick="expandSkewChart('atm','ATM IV')">
+        <div style="position:relative;height:220px"><canvas id="skew-atm-chart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span>10&#916; — Call vs Put</span>
+        <span style="color:var(--muted);cursor:pointer;font-size:15px;line-height:1;transition:color .15s"
+              onmouseenter="this.style.color='var(--acc)'" onmouseleave="this.style.color='var(--muted)'"
+              onclick="expandSkewChart('10d','10Δ — Call vs Put')" title="Expand">&#x26F6;</span>
+      </div>
+      <div class="skew-chart-wrap" onclick="expandSkewChart('10d','10Δ — Call vs Put')">
+        <div style="position:relative;height:220px"><canvas id="skew-10d-chart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span>25&#916; — Call vs Put</span>
+        <span style="color:var(--muted);cursor:pointer;font-size:15px;line-height:1;transition:color .15s"
+              onmouseenter="this.style.color='var(--acc)'" onmouseleave="this.style.color='var(--muted)'"
+              onclick="expandSkewChart('25d','25Δ — Call vs Put')" title="Expand">&#x26F6;</span>
+      </div>
+      <div class="skew-chart-wrap" onclick="expandSkewChart('25d','25Δ — Call vs Put')">
+        <div style="position:relative;height:220px"><canvas id="skew-25d-chart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span>35&#916; — Call vs Put</span>
+        <span style="color:var(--muted);cursor:pointer;font-size:15px;line-height:1;transition:color .15s"
+              onmouseenter="this.style.color='var(--acc)'" onmouseleave="this.style.color='var(--muted)'"
+              onclick="expandSkewChart('35d','35Δ — Call vs Put')" title="Expand">&#x26F6;</span>
+      </div>
+      <div class="skew-chart-wrap" onclick="expandSkewChart('35d','35Δ — Call vs Put')">
+        <div style="position:relative;height:220px"><canvas id="skew-35d-chart"></canvas></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════ SKEW EXPAND OVERLAY ══════════════════════════ -->
+<div id="skew-expand-overlay" onclick="closeSkewExpand(event)">
+  <div id="skew-expand-box" onclick="event.stopPropagation()">
+    <div id="skew-expand-header">
+      <span id="skew-expand-title"></span>
+      <button id="skew-expand-close" onclick="closeSkewExpandBtn()" title="Close">&#x2715;</button>
+    </div>
+    <div id="skew-expand-chart-wrap">
+      <canvas id="skew-expand-canvas"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ SKEW EXPORT MODAL ══════════════════════════ -->
+<div id="skew-export-modal">
+  <div class="modal-box" style="width:460px;max-width:95vw">
+    <button class="modal-close" onclick="closeSkewExport()">&#x2715;</button>
+    <div class="modal-title">Export Skew History — PNG</div>
+    <div style="color:var(--dim);font-size:11px;margin-bottom:14px">
+      Click to select &nbsp;·&nbsp; Ctrl+click to multi-select &nbsp;·&nbsp; One PNG per selected chart
+    </div>
+    <div class="skew-exp-grid" id="skew-exp-grid"></div>
+    <button class="btn-gen" onclick="generateSkewPngs()">&#128247; &nbsp;GENERATE SELECTED</button>
   </div>
 </div>
 
@@ -493,7 +703,30 @@ tr:hover td{background:var(--surf2)}
 <!-- ══════════════════════════ JAVASCRIPT ══════════════════════════ -->
 <script>
 // ── Data injected by Flask ────────────────────────────────────────────────────
-const D = {{ data | tojson }};
+let D = {{ data | tojson }};
+let _currentCommodity = D.commodity || 'CT';
+
+async function loadAndRender(commodity) {
+  _currentCommodity = commodity;
+  localStorage.setItem('vlm_commodity', commodity);
+  document.getElementById('data-date').textContent = 'Loading…';
+  // Destroy all Chart.js instances before re-rendering
+  Object.values(Chart.instances).forEach(c => { try{ c.destroy(); }catch(e){} });
+  // Reset skew history state so it refetches for new commodity
+  _skewHistLoaded = false;
+  _skewData = null;
+  try {
+    const resp = await fetch('/api/data?commodity=' + commodity);
+    const data = await resp.json();
+    if (data.error) { document.getElementById('data-date').textContent = 'Error: ' + data.error; return; }
+    // Replace D's contents in-place
+    for (const k in D) delete D[k];
+    Object.assign(D, data);
+    init();
+  } catch(e) {
+    document.getElementById('data-date').textContent = 'Fetch error';
+  }
+}
 
 // ── Black-76 ──────────────────────────────────────────────────────────────────
 const Black76 = {
@@ -584,6 +817,7 @@ let smileChartType = 'smile';
 let smileChart = null;
 let surfChart  = null;
 let skewChart  = null;
+let lastTop15  = [];
 let legs = [];
 let legIdCounter = 0;
 let scenMode = 'today';     // 'today' | 'expiry'
@@ -610,9 +844,9 @@ function pnlColor(v){
 }
 function pnlTxt(v){
   if(v==null) return '—';
-  if(v > 0.1) return '+'+v.toFixed(2);
-  if(v <-0.1) return v.toFixed(2);
-  return v.toFixed(2);
+  if(v > 0.1) return '+'+v.toFixed(2)+'¢';
+  if(v <-0.1) return v.toFixed(2)+'¢';
+  return v.toFixed(2)+'¢';
 }
 function getRFR(){ return (parseFloat(document.getElementById('rfr-input').value)||4.50)/100 }
 function getFwd(ticker){ return D.futures[ticker] ?? null }
@@ -632,17 +866,36 @@ function getChainPx(ticker, strike, pc){
 function init(){
   if(D.error){ document.body.innerHTML=`<div class="error-box" style="margin:40px">${D.error}</div>`; return; }
 
+  // Commodity selector — sync and title
+  const commSel = document.getElementById('commod-sel');
+  const comm = D.commodity || 'CT';
+  commSel.value = comm;
+  if(!commSel._wired){ commSel._wired=true; commSel.addEventListener('change', e=>loadAndRender(e.target.value)); }
+  const commNames = {CT:'CT Options Analytics',KC:'KC Coffee Analytics',SB:'SB Sugar Analytics',CC:'CC Cocoa Analytics'};
+  document.getElementById('commod-title').textContent = commNames[comm] || comm+' Options Analytics';
+
   // Data date
   document.getElementById('data-date').textContent = 'Data: ' + D.last_date;
 
-  // Populate header expiry selector
-  const hdrSel = document.getElementById('hdr-expiry');
-  hdrSel.innerHTML = D.expiries.map(e=>`<option value="${e}">${e}</option>`).join('');
-  updateHeader();
+  // Source badge
+  const badge = document.getElementById('src-badge');
+  if(D.data_source === 'live_rtd')   { badge.textContent = '● LIVE RTD'; badge.className = 'src-badge src-live'; }
+  else if(D.data_source === 'saved_xlsx') { badge.textContent = '◉ XLSX'; badge.className = 'src-badge src-xlsx'; }
+  else { badge.textContent = 'CSV'; badge.className = 'src-badge src-csv'; }
 
-  // Smile expiry selector
+  // Live futures bar
+  renderFuturesBar();
+
+  // Smile expiry selector (also drives the header ATM IV tile)
   const smileSel = document.getElementById('smile-expiry');
   smileSel.innerHTML = D.expiries.map(e=>`<option value="${e}">${e} — ${D.expiry_labels[e]||''}</option>`).join('');
+  if(D.expiries.length) setAutoRange(D.expiries[0]);
+
+  // Surface expiry selector — same options, synced to smile selector
+  const surfSel = document.getElementById('surface-expiry');
+  surfSel.innerHTML = smileSel.innerHTML;
+
+  updateHeader();
   renderSmile();
 
   // Export expiry selector
@@ -653,18 +906,130 @@ function init(){
   buildTemplateUI();
 }
 
+// ── Live futures bar ──────────────────────────────────────────────────────────
+function renderFuturesBar(){
+  const lf  = D.live_futures || {};
+  const bar = document.getElementById('futures-bar');
+
+  // Show tickers that have a futures price; for CT restrict to H/K/N/V/Z (standard futures months)
+  const CT_FUT_MONTHS = new Set(['H','K','N','V','Z']);
+  const tickers = D.expiries.filter(e => {
+    if(!D.futures[e]) return false;
+    return (D.commodity||'CT') !== 'CT' || CT_FUT_MONTHS.has(e[2]);
+  });
+  if(!tickers.length){ bar.style.display='none'; return; }
+  bar.style.display = 'flex';
+  bar.innerHTML = tickers.map(tkr=>{
+    const d   = lf[tkr] || {};
+    // RTD live last → RTD settle → CSV settle (all three are meaningful)
+    const isLive = d.last > 0;
+    const px  = (d.last  > 0 ? d.last  : null)
+             || (d.settle> 0 ? d.settle: null)
+             || D.futures[tkr];
+    const chg = d.change   > 0 || d.change   < 0 ? d.change   : null;
+    const pct = d.pct_chg  > 0 || d.pct_chg  < 0 ? d.pct_chg  : null;
+    const vol = d.volume   > 0 ? d.volume   : null;
+    const oi  = d.oi       > 0 ? d.oi       : null;
+    const cls = chg > 0 ? 'pos' : chg < 0 ? 'neg' : '';
+    return `<div class="fut-tile">
+      <span class="fut-ticker">${tkr}</span>
+      <span class="fut-px">${px!=null ? px.toFixed(2) : '—'}</span>
+      <div class="fut-meta-col">
+        ${chg!=null ? `<span class="fut-chg ${cls}">${chg>=0?'+':''}${chg.toFixed(2)} (${pct!=null?(pct>=0?'+':'')+pct.toFixed(1)+'%':'—'})</span>` : `<span class="fut-meta">${isLive?'Live':'Settle'}</span>`}
+        ${vol!=null||oi!=null ? `<span class="fut-meta">${vol!=null?'Vol '+vol.toLocaleString():''}${vol!=null&&oi!=null?' · ':''}${oi!=null?'OI '+oi.toLocaleString():''}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Vol smile range ───────────────────────────────────────────────────────────
+function setAutoRange(ticker){
+  // Use live forward if available, else settle
+  const F = (D.live_smile_fwd && D.live_smile_fwd[ticker]) || D.futures[ticker];
+  if(!F) return;
+  const dte = getDTE(ticker, D.last_date); if(dte <= 0) return;
+  const T   = dte/365;
+  const sig = Math.max((D.atm_iv[ticker]||24)/100, 0.12);
+  // ~5-delta wings
+  const lo = Math.max(1, Math.floor(F * Math.exp(-1.645 * sig * Math.sqrt(T))));
+  const hi = Math.ceil(F * Math.exp( 1.645 * sig * Math.sqrt(T)));
+  document.getElementById('smile-min').value = lo;
+  document.getElementById('smile-max').value = hi;
+}
+function smileExpChange(){
+  const ticker = document.getElementById('smile-expiry').value;
+  if(ticker) setAutoRange(ticker);
+  // keep surface selector in sync
+  document.getElementById('surface-expiry').value = ticker;
+  updateHeader();
+  renderSmile();
+}
+
+function surfaceExpChange(){
+  const ticker = document.getElementById('surface-expiry').value;
+  // keep smile selector in sync so header reads correctly
+  document.getElementById('smile-expiry').value = ticker;
+  updateHeader();
+}
+function filterStrikeRange(data){
+  const minK = parseFloat(document.getElementById('smile-min').value);
+  const maxK = parseFloat(document.getElementById('smile-max').value);
+  const useMin = !isNaN(minK), useMax = !isNaN(maxK);
+  if(!useMin && !useMax) return data;
+  const out = {strikes:[], ivs:[], callIVs:[], putIVs:[]};
+  data.strikes.forEach((k,i)=>{
+    if((useMin && k < minK) || (useMax && k > maxK)) return;
+    out.strikes.push(k);
+    out.ivs.push(data.ivs[i]);
+    out.callIVs.push(data.callIVs[i]);
+    out.putIVs.push(data.putIVs[i]);
+  });
+  return out;
+}
+
 // ── Header strip ──────────────────────────────────────────────────────────────
 function updateHeader(){
-  const e = document.getElementById('hdr-expiry').value;
+  const e = document.getElementById('smile-expiry').value;
   activeExpiry = e;
 
-  // ATM IV
-  const iv = D.atm_iv[e];
-  const ivEl = document.getElementById('hdr-iv');
-  ivEl.textContent = iv!=null ? iv.toFixed(1)+'%' : '—';
-
-  // IV label
+  // ATM IV label
   document.getElementById('hdr-iv-label').textContent = `ATM · ${e} · ${D.expiry_labels[e]||''}`;
+
+  // Compute ATM K and live sigma first — both IV display and straddle use the same source.
+  // Live smile (D.live_smile[e]) has IVs from live bid/ask mids — this is the authoritative
+  // source when RTD is connected. Fall back to D.atm_iv[e] (settle) when RTD is offline.
+  const _lsm     = D.live_smile && D.live_smile[e];
+  const stradF   = (D.live_smile_fwd && D.live_smile_fwd[e]) || D.futures[e];
+  const _lsKeys  = _lsm ? Object.keys(_lsm).map(Number) : null;
+  const atmK     = _lsKeys
+      ? _lsKeys.reduce((a, b) => Math.abs(b - stradF) < Math.abs(a - stradF) ? b : a)
+      : (D.atm_strike && D.atm_strike[e]);
+  // ATM IV: D.atm_iv[e] is updated by backend with live Bloomberg straddle vol when RTD connected.
+  const _isLive = !!_lsm;
+  const liveAtmIV = D.atm_iv[e];
+  const ivEl = document.getElementById('hdr-iv');
+  ivEl.textContent = liveAtmIV != null ? liveAtmIV.toFixed(1)+'%' : '—';
+  ivEl.style.color = _isLive ? '#22c55e' : '';
+  document.getElementById('hdr-iv-label').textContent =
+    `ATM · ${e} · ${D.expiry_labels[e]||''} · ${_isLive ? 'LIVE' : 'SETTLE'}`;
+
+  // ATM Straddle — use the same sigma as the IV display (live smile at ATM K).
+  // This guarantees IV header and straddle price are always computed from identical source.
+  let straddle = null;
+  if(atmK != null && stradF > 0){
+    const stradDte = getDTE(e, D.last_date);
+    const stradT   = stradDte / 365;
+    const stradR   = getRFR();
+    const stradSig = liveAtmIV != null ? liveAtmIV / 100 : null;
+    if(stradSig && stradT > 0){
+      const df      = Math.exp(-stradR * stradT);
+      const callPx  = Black76.price(stradF, atmK, stradT, stradR, stradSig, true);
+      if(callPx != null)
+        straddle = 2 * callPx - (stradF - atmK) * df;
+    }
+  }
+  document.getElementById('hdr-straddle').textContent    = straddle!=null ? straddle.toFixed(2)+'¢' : '—';
+  document.getElementById('hdr-straddle-sub').textContent = atmK!=null ? `K = ${atmK}` : '—';
 
   // IV change
   const d1 = D.atm_iv_1d_chg[e], d7 = D.atm_iv_1w_chg[e];
@@ -715,8 +1080,13 @@ function switchTab(name){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   event.target.classList.add('active');
-  if(name==='surface') loadSurface();
+  if(name==='surface'){
+    // sync surface selector to whatever smile panel currently has
+    document.getElementById('surface-expiry').value = document.getElementById('smile-expiry').value;
+    loadSurface();
+  }
   if(name==='smile') setTimeout(()=>renderSmile(),50);
+  if(name==='skew') loadSkewHistory();
 }
 
 // ── Vol Smile ─────────────────────────────────────────────────────────────────
@@ -737,10 +1107,23 @@ function setChartType(el,type){
 function buildSmileData(ticker, dateSet){
   // dateSet: 'today'|'prev'|'week'
   const srcMap = {today:D.options_today, prev:D.options_prev, week:D.options_week};
+  // Use the forward that was consistent with each date's option prices.
+  // Mixing today's forward with historical prices breaks IV when market moves.
+  const fwdMap = {
+    today: D.futures,
+    prev:  D.prev_futures || D.futures,
+    week:  D.week_futures || D.futures,
+  };
   const rows = (srcMap[dateSet]||[]).filter(r=>r.ticker===ticker);
-  const F    = D.futures[ticker];
+  const F    = (fwdMap[dateSet]||D.futures)[ticker];
+  // Use the forward-consistent ATM: find the strike closest to F for this date
+  const atmToday = D.atm_strike[ticker] || F;
+  const allStrikes = [...new Set(rows.map(r=>r.strike))];
+  const atm = allStrikes.length
+    ? allStrikes.reduce((best,k) => Math.abs(k-F)<Math.abs(best-F)?k:best, allStrikes[0])
+    : atmToday;
   const lt   = D.last_trade[ticker];
-  if(!F||!lt) return {strikes:[],callIVs:[],putIVs:[]};
+  if(!F||!lt) return {strikes:[], ivs:[], callIVs:[], putIVs:[]};
 
   const refDate = dateSet==='today'?D.last_date: dateSet==='prev'?D.prev_date:D.week_date;
   const dte = getDTE(ticker, refDate);
@@ -748,7 +1131,7 @@ function buildSmileData(ticker, dateSet){
   const r   = getRFR();
 
   const strikes = [...new Set(rows.map(r=>r.strike))].sort((a,b)=>a-b);
-  const callIVs = [], putIVs = [];
+  const ivs = [], callIVs = [], putIVs = [];
 
   for(const k of strikes){
     const callRow = rows.find(r=>r.pc==='Call'&&Math.abs(r.strike-k)<0.01);
@@ -761,85 +1144,190 @@ function buildSmileData(ticker, dateSet){
 
     callIVs.push(cIV!=null?cIV*100:null);
     putIVs.push(pIV!=null?pIV*100:null);
+
+    // Unified OTM smile: use PUT for k<=ATM (OTM put), CALL for k>ATM (OTM call).
+    const isOTMPut = k <= atm;
+    const oiOTM = isOTMPut ? (putRow ? putRow.oi : 0) : (callRow ? callRow.oi : 0);
+
+    // Delta filter: skip strikes outside 3%–55% OTM delta range (eliminates stale deep-OTM settlements)
+    const atmSig = Math.max((D.atm_iv[ticker]||24)/100, 0.12);
+    const deltaOTM = isOTMPut
+      ? Math.abs(Black76.delta(F,k,T,r,atmSig,false))
+      : Math.abs(Black76.delta(F,k,T,r,atmSig,true));
+
+    let unified = null;
+    if(oiOTM >= 10 && deltaOTM >= 0.03 && deltaOTM <= 0.55){
+      unified = isOTMPut ? (pIV??cIV) : (cIV??pIV);
+      // Sanity cap: reject IVs beyond 2.5× ATM vol (exchange model artefacts)
+      if(unified !== null && unified > atmSig * 2.5) unified = null;
+    }
+    ivs.push(unified!=null ? unified*100 : null);
   }
-  return {strikes, callIVs, putIVs};
+  return {strikes, ivs, callIVs, putIVs};
 }
 
 function renderSmile(){
   const ticker = document.getElementById('smile-expiry').value;
   if(!ticker) return;
+  renderATMGreeks(ticker);
 
-  const today = buildSmileData(ticker,'today');
+  const todayRaw = buildSmileData(ticker,'today');
+
+  const today = filterStrikeRange(todayRaw);
   const atm   = D.atm_strike[ticker];
 
   if(smileChartType === 'smile'){
-    const datasets = [
-      {label:'Calls (today)',data:today.callIVs,borderColor:'#E8C547',backgroundColor:'transparent',
-       borderWidth:2,spanGaps:true,pointRadius:3,tension:0.3},
-      {label:'Puts (today)', data:today.putIVs, borderColor:'#3b82f6',backgroundColor:'transparent',
-       borderWidth:2,spanGaps:true,pointRadius:3,tension:0.3},
-    ];
+    const liveSmileMap = (D.live_smile && D.live_smile[ticker]) || null;
+    const hasLive = liveSmileMap && Object.keys(liveSmileMap).length > 0;
+
+    // Apply same strike range filter to live smile
+    let liveIVs = null;
+    let liveStrikes = null;
+    if(hasLive){
+      const minK = parseFloat(document.getElementById('smile-min').value) || 0;
+      const maxK = parseFloat(document.getElementById('smile-max').value) || Infinity;
+      const allLiveStrikes = Object.keys(liveSmileMap).map(Number).sort((a,b)=>a-b);
+      liveStrikes = allLiveStrikes.filter(k => k >= minK && k <= maxK);
+      liveIVs = liveStrikes.map(k => liveSmileMap[k]);
+    }
+
+    // When live data available: live is primary (gold), CSV settle is secondary (dimmer)
+    // When no live data: CSV settle is primary
+    const datasets = [];
+    if(hasLive){
+      datasets.push({label:'Live (BBG mid)', data:liveIVs, borderColor:'#E8C547',
+        backgroundColor:'rgba(232,197,71,.08)', borderWidth:2.5,
+        spanGaps:true, pointRadius:3, tension:0.3, fill:false,
+        _strikes: liveStrikes});
+      datasets.push({label:'Settle', data:today.ivs, borderColor:'#8a7a2e',
+        backgroundColor:'transparent', borderWidth:1.5, borderDash:[5,3],
+        spanGaps:true, pointRadius:2, tension:0.3, fill:false});
+    } else {
+      datasets.push({label:'Vol Smile', data:today.ivs, borderColor:'#E8C547',
+        backgroundColor:'rgba(232,197,71,.07)', borderWidth:2.5,
+        spanGaps:true, pointRadius:3, tension:0.3, fill:false});
+    }
     if(smileOverlays.prev){
-      const prev = buildSmileData(ticker,'prev');
-      datasets.push(
-        {label:'Calls (prev)',data:prev.callIVs,borderColor:'rgba(232,197,71,.4)',
-         backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],spanGaps:true,pointRadius:0,tension:0.3},
-        {label:'Puts (prev)', data:prev.putIVs, borderColor:'rgba(59,130,246,.4)',
-         backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],spanGaps:true,pointRadius:0,tension:0.3},
-      );
+      const prev = filterStrikeRange(buildSmileData(ticker,'prev'));
+      datasets.push({label:'Yesterday', data:prev.ivs, borderColor:'#60a5fa',
+        backgroundColor:'transparent', borderWidth:2, borderDash:[6,3],
+        spanGaps:true, pointRadius:2, tension:0.3, fill:false});
     }
     if(smileOverlays.week){
-      const week = buildSmileData(ticker,'week');
-      datasets.push(
-        {label:'Calls (week)',data:week.callIVs,borderColor:'rgba(232,197,71,.2)',
-         backgroundColor:'transparent',borderWidth:1,borderDash:[2,6],spanGaps:true,pointRadius:0,tension:0.3},
-        {label:'Puts (week)', data:week.putIVs, borderColor:'rgba(59,130,246,.2)',
-         backgroundColor:'transparent',borderWidth:1,borderDash:[2,6],spanGaps:true,pointRadius:0,tension:0.3},
-      );
+      const week = filterStrikeRange(buildSmileData(ticker,'week'));
+      datasets.push({label:'1 Week Ago', data:week.ivs, borderColor:'#f87171',
+        backgroundColor:'transparent', borderWidth:2, borderDash:[3,4],
+        spanGaps:true, pointRadius:2, tension:0.3, fill:false});
     }
-    drawSmileChart(today.strikes, datasets, atm, 'IV (%)');
+    // Use live strikes as x-axis when available (more complete than CSV)
+    const chartStrikes = (hasLive && liveStrikes) ? liveStrikes : today.strikes;
+    // Re-align secondary datasets to chart strikes
+    datasets.forEach(ds => {
+      if(ds._strikes) { delete ds._strikes; return; } // primary live — already aligned
+      if(ds.data && ds.data.length !== chartStrikes.length){
+        ds.data = chartStrikes.map(k => {
+          const i = today.strikes.findIndex(s=>Math.abs(s-k)<0.01);
+          return i>=0 ? ds.data[i] ?? today.ivs[i] ?? null : null;
+        });
+      }
+    });
+    drawSmileChart(chartStrikes, datasets, atm, 'IV (%)');
   } else {
-    // IV change chart: today vs prev
-    const prev = buildSmileData(ticker,'prev');
-    const cChg = today.callIVs.map((v,i)=> v!=null&&prev.callIVs[i]!=null ? v-prev.callIVs[i] : null);
-    const pChg = today.putIVs.map((v,i)=> v!=null&&prev.putIVs[i]!=null ? v-prev.putIVs[i] : null);
-    const datasets = [
-      {label:'Call IV Chg',data:cChg,borderColor:'transparent',
-       backgroundColor: cChg.map(v=>v>=0?'rgba(34,197,94,.7)':'rgba(239,68,68,.7)'),
-       spanGaps:true,barThickness:8},
-      {label:'Put IV Chg', data:pChg,borderColor:'transparent',
-       backgroundColor: pChg.map(v=>v>=0?'rgba(34,197,94,.4)':'rgba(239,68,68,.4)'),
-       spanGaps:true,barThickness:8},
-    ];
+    // IV change: today OTM smile vs prev OTM smile
+    const prev = filterStrikeRange(buildSmileData(ticker,'prev'));
+    const ivChg = today.strikes.map((k,i)=>{
+      const pi = prev.strikes.findIndex(s=>Math.abs(s-k)<0.01);
+      return (today.ivs[i]!=null && pi>=0 && prev.ivs[pi]!=null)
+        ? today.ivs[i]-prev.ivs[pi] : null;
+    });
+    const datasets = [{
+      label:'IV Change (OTM)',
+      data: ivChg,
+      borderColor:'transparent',
+      backgroundColor: ivChg.map(v=>v==null?'transparent':v>=0?'rgba(34,197,94,.75)':'rgba(239,68,68,.75)'),
+      spanGaps:true, barThickness:10,
+    }];
     drawSmileChart(today.strikes, datasets, atm, 'IV Chg (vol pts)', 'bar');
   }
 
-  // Top-5 change table
-  const prev2 = buildSmileData(ticker,'prev');
-  const rows = today.strikes.map((k,i)=>{
-    const cc = today.callIVs[i]!=null&&prev2.callIVs[i]!=null ? today.callIVs[i]-prev2.callIVs[i] : null;
-    const pc = today.putIVs[i]!=null&&prev2.putIVs[i]!=null  ? today.putIVs[i]-prev2.putIVs[i]   : null;
+  // Top-5 OTM strikes by IV change — uses OTM side only (puts ≤ ATM, calls > ATM)
+  const prev2Raw = buildSmileData(ticker,'prev');
+  const itmAtm = D.atm_strike[ticker]||D.futures[ticker]||0;
+  // Use live BBG mid IV when available (same source as ATM IV header), else settle
+  const liveSmileMap = (D.live_smile && D.live_smile[ticker]) || null;
+  const top5rows = today.strikes.map((k,i)=>{
+    const isCall = k > itmAtm;
+    const pi = prev2Raw.strikes.findIndex(s=>Math.abs(s-k)<0.01);
+    const liveIV = liveSmileMap ? (liveSmileMap[k] ?? liveSmileMap[Math.round(k)] ?? null) : null;
+    const ivNow  = liveIV != null ? liveIV : today.ivs[i];
+    const ivPrev = pi>=0 ? prev2Raw.ivs[pi] : null;
+    const ivChg  = ivNow!=null&&ivPrev!=null ? ivNow-ivPrev : null;
+
     const todayRow = D.options_today.filter(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01);
     const prevRow  = D.options_prev.filter(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01);
-    const coiC = todayRow.find(r=>r.pc==='Call'), coiP = todayRow.find(r=>r.pc==='Put');
-    const poiC = prevRow.find(r=>r.pc==='Call'),  poiP = prevRow.find(r=>r.pc==='Put');
+    const pc = isCall?'Call':'Put';
+    const tOI = todayRow.find(r=>r.pc===pc);
+    const pOI = prevRow.find(r=>r.pc===pc);
     return {
-      k, cc, pc,
-      coiChg: coiC&&poiC ? coiC.oi-poiC.oi : null,
-      poiChg: coiP&&poiP ? coiP.oi-poiP.oi : null,
-      score: Math.max(Math.abs(cc||0), Math.abs(pc||0))
+      k, ivNow, ivChg, side:pc,
+      oiChg: tOI&&pOI ? tOI.oi-pOI.oi : null,
+      oi: tOI ? tOI.oi : null,
+      score: Math.abs(ivChg||0),
     };
-  }).sort((a,b)=>b.score-a.score).slice(0,5);
+  }).filter(r=>r.ivChg!=null).sort((a,b)=>b.score-a.score).slice(0,15);
+  lastTop15 = top5rows;
 
-  const tbody = document.querySelector('#smile-chg-table tbody');
-  tbody.innerHTML = rows.map(r=>`
-    <tr>
-      <td>${r.k.toFixed(2)}</td>
-      <td class="num ${clr(r.cc)}">${r.cc!=null?fmtSgn(r.cc)+'%':'—'}</td>
-      <td class="num ${clr(r.pc)}">${r.pc!=null?fmtSgn(r.pc)+'%':'—'}</td>
-      <td class="num ${clr(r.coiChg)}">${r.coiChg!=null?r.coiChg.toLocaleString():'—'}</td>
-      <td class="num ${clr(r.poiChg)}">${r.poiChg!=null?r.poiChg.toLocaleString():'—'}</td>
-    </tr>`).join('');
+  const theadHtml = `<thead><tr>
+    <th>Strike</th><th class="num">IV</th><th class="num">Chg 1D</th>
+    <th class="num">OI Δ</th><th class="num">OI</th>
+  </tr></thead>`;
+  const mkRow = r => `<tr>
+    <td>${r.k.toFixed(2)} <span style="font-size:10px;color:var(--muted)">${r.side}</span></td>
+    <td class="num">${r.ivNow!=null?r.ivNow.toFixed(1)+'%':'—'}</td>
+    <td class="num ${clr(r.ivChg)}">${r.ivChg!=null?fmtSgn(r.ivChg)+'%':'—'}</td>
+    <td class="num ${clr(r.oiChg)}">${r.oiChg!=null?r.oiChg.toLocaleString():'—'}</td>
+    <td class="num">${r.oi!=null?r.oi.toLocaleString():'—'}</td>
+  </tr>`;
+  const half = Math.ceil(top5rows.length/2);
+  const mkTbl = rows => `<table style="flex:1;min-width:0">${theadHtml}<tbody>${rows.map(mkRow).join('')}</tbody></table>`;
+  document.getElementById('smile-chg-container').innerHTML =
+    mkTbl(top5rows.slice(0,half)) + mkTbl(top5rows.slice(half));
+}
+
+function renderATMGreeks(ticker){
+  const el = document.getElementById('atm-greeks-strip');
+  if(!el) return;
+  const F   = (D.live_smile_fwd && D.live_smile_fwd[ticker]) || D.futures[ticker];
+  // Use live ATM (nearest strike to live forward) if available, else settle ATM
+  const liveSmileStrikes = D.live_smile && D.live_smile[ticker]
+    ? Object.keys(D.live_smile[ticker]).map(Number)
+    : null;
+  const K = liveSmileStrikes
+    ? liveSmileStrikes.reduce((a, b) => Math.abs(b - F) < Math.abs(a - F) ? b : a)
+    : (D.atm_strike[ticker] || F);
+  const T   = getDTE(ticker, D.last_date) / 365;
+  const r   = getRFR();
+  const sig = (D.atm_iv[ticker] || 0) / 100;
+  if(!F || !K || T <= 0 || sig <= 0){ el.innerHTML = ''; return; }
+  const callD = Black76.delta(F, K, T, r, sig, true);
+  const putD  = Black76.delta(F, K, T, r, sig, false);
+  const gamma = Black76.gamma(F, K, T, r, sig);
+  const thetaC = Black76.theta(F, K, T, r, sig, true);
+  const thetaP = Black76.theta(F, K, T, r, sig, false);
+  const vega  = Black76.vega(F, K, T, r, sig) * 100; // per 1 vol pt
+  const fmt2 = v => v.toFixed(3);
+  const cell = (label, val, sub, color) => `
+    <div style="flex:1;padding:10px 14px;border-right:1px solid var(--bord2);min-width:0">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${label}</div>
+      <div style="font-size:17px;font-weight:700;color:${color||'var(--text)'};line-height:1">${val}</div>
+      ${sub ? `<div style="font-size:10px;color:var(--dim);margin-top:3px">${sub}</div>` : ''}
+    </div>`;
+  el.innerHTML =
+    cell('ATM Strike / Fwd', `${K} / ${F.toFixed(2)}`, `IV: ${(sig*100).toFixed(1)}%`, 'var(--acc)') +
+    cell('Δ Call / Put', `${fmt2(callD)} / ${fmt2(putD)}`, 'per futures contract', null) +
+    cell('Γ', fmt2(gamma), '¢ delta per 1¢ move', null) +
+    cell('Θ Call / Put', `${thetaC.toFixed(3)} / ${thetaP.toFixed(3)}`, '¢ per calendar day', 'var(--red)') +
+    cell('ν (Vega)', vega.toFixed(3), '¢ per 1 vol pt', 'var(--grn)');
 }
 
 function drawSmileChart(labels, datasets, atmStrike, yLabel, type='line'){
@@ -860,8 +1348,8 @@ function drawSmileChart(labels, datasets, atmStrike, yLabel, type='line'){
         }}} : {},
       },
       scales:{
-        x:{ticks:{color:'#94a3b8',font:{size:10}},grid:{color:'#1e2a3a'}},
-        y:{ticks:{color:'#94a3b8',font:{size:10},callback:v=>v+'%'},
+        x:{ticks:{color:'#94a3b8',font:{size:10},autoSkip:true,maxTicksLimit:40,maxRotation:45,minRotation:0},grid:{color:'#1e2a3a'}},
+        y:{ticks:{color:'#94a3b8',font:{size:10},stepSize:0.5,callback:v=>v+'%'},
            grid:{color:'#1e2a3a'}, title:{display:true,text:yLabel,color:'#4a6080',font:{size:10}}},
       },
     }
@@ -1370,6 +1858,97 @@ function addNeutralHedge(){
   recomputeAll();
 }
 
+// ── Multi-expiry smile (Bloomberg OVDV-style) ─────────────────────────────────
+let mesMode  = 'abs';
+let mesChart = null;
+
+function setMESMode(mode, el){
+  mesMode = mode;
+  document.getElementById('mes-abs').classList.toggle('active',  mode==='abs');
+  document.getElementById('mes-mono').classList.toggle('active', mode==='mono');
+  renderMESmile();
+}
+
+function renderMESmile(){
+  const r = getRFR();
+  const COLORS = ['#E8C547','#3b82f6','#22c55e','#ef4444','#a855f7',
+                  '#f97316','#06b6d4','#84cc16','#f43f5e','#8b5cf6','#ec4899','#14b8a6'];
+
+  const datasets = D.expiries.map((ticker, ci)=>{
+    const F   = D.futures[ticker];
+    const atm = D.atm_strike[ticker] || F;
+    const lt  = D.last_trade[ticker];
+    if(!F || !lt) return null;
+    const dte = getDTE(ticker, D.last_date);
+    const T   = dte / 365;
+    if(T <= 0) return null;
+
+    const rows    = D.options_today.filter(row => row.ticker === ticker);
+    const strikes = [...new Set(rows.map(row => row.strike))].sort((a,b)=>a-b);
+
+    const atmSig = Math.max((D.atm_iv[ticker]||24)/100, 0.12);
+    const ivCap  = atmSig * 2.5;
+    const pts = [];
+    for(const k of strikes){
+      const usePut  = k <= atm;
+      const isCall  = !usePut;
+      // Delta filter: 3%–55% OTM range only
+      const deltaOTM = Math.abs(Black76.delta(F,k,T,r,atmSig,isCall));
+      if(deltaOTM < 0.03 || deltaOTM > 0.55) continue;
+      const pcStr   = usePut ? 'Put' : 'Call';
+      const optRow  = rows.find(row => row.pc === pcStr && Math.abs(row.strike - k) < 0.01);
+      if(!optRow || optRow.px <= 0 || optRow.oi < 10) continue;
+      const iv = Black76.impliedVol(optRow.px, F, k, T, r, isCall);
+      if(!iv || iv > ivCap || iv < 0.01) continue;
+      const x = mesMode === 'mono' ? Math.round((k / F - 1) * 1000) / 10 : k;
+      pts.push({x, y: Math.round(iv * 1000) / 10});
+    }
+    if(pts.length < 3) return null;
+
+    const col = COLORS[ci % COLORS.length];
+    return {
+      label: D.expiry_labels[ticker] || ticker,
+      data:  pts.sort((a,b) => a.x - b.x),
+      borderColor:     col,
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      pointRadius: 2.5,
+      tension: 0.3,
+      showLine: true,
+    };
+  }).filter(Boolean);
+
+  const ctx = document.getElementById('mes-chart').getContext('2d');
+  if(mesChart) mesChart.destroy();
+  mesChart = new Chart(ctx, {
+    type: 'scatter',
+    data: {datasets},
+    options:{
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins:{
+        legend:{labels:{color:'#94a3b8',font:{size:10},boxWidth:10,padding:8}},
+        tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y.toFixed(1)}%`}},
+      },
+      scales:{
+        x:{
+          ticks:{color:'#94a3b8',font:{size:10},stepSize:1,maxTicksLimit:50,autoSkip:true,maxRotation:45},
+          grid:{color:'#1e2a3a'},
+          title:{display:true,
+            text: mesMode==='mono' ? 'Moneyness vs Forward (%)' : 'Strike (¢/lb)',
+            color:'#4a6080',font:{size:10}},
+        },
+        y:{
+          ticks:{color:'#94a3b8',font:{size:10},callback:v=>v+'%'},
+          grid:{color:'#1e2a3a'},
+          title:{display:true,text:'Implied Vol (%)',color:'#4a6080',font:{size:10}},
+        },
+      },
+    }
+  });
+}
+
 // ── Vol Surface panel ─────────────────────────────────────────────────────────
 function loadSurface(){
   const r = getRFR();
@@ -1377,15 +1956,20 @@ function loadSurface(){
   // Build surface table: rows = expiries, cols = delta buckets
   const DELTAS = [
     {label:'10Δ Put', target:-0.10, isCall:false},
+    {label:'15Δ Put', target:-0.15, isCall:false},
     {label:'25Δ Put', target:-0.25, isCall:false},
+    {label:'35Δ Put', target:-0.35, isCall:false},
     {label:'ATM',     target:null,  isCall:null},
+    {label:'35Δ Call',target: 0.35, isCall:true},
     {label:'25Δ Call',target: 0.25, isCall:true},
+    {label:'15Δ Call',target: 0.15, isCall:true},
     {label:'10Δ Call',target: 0.10, isCall:true},
   ];
 
   const tbody = document.getElementById('surf-tbody');
   tbody.innerHTML = '';
-  const atmHistory = {};  // ticker -> [{date, iv}]
+  const _surfSkew = {};  // computed skew per ticker (live when available)
+  let _surfHasLive = false;
 
   for(const ticker of D.expiries){
     const F   = D.futures[ticker];
@@ -1413,7 +1997,26 @@ function loadSurface(){
     }
 
     function getIVatDelta(targetDelta, isCall){
-      if(targetDelta===null) return D.atm_iv[ticker];
+      if(targetDelta===null) return D.atm_iv[ticker]; // ATM: already live via backend straddle
+      // Prefer live smile interpolation (same source as header ATM IV)
+      const lsm = D.live_smile && D.live_smile[ticker];
+      if(lsm && T > 0){
+        const Flive = (D.live_smile_fwd && D.live_smile_fwd[ticker]) || F;
+        const pts = [];
+        for(const [kStr, ivPct] of Object.entries(lsm)){
+          const k2 = Number(kStr), iv2 = ivPct / 100;
+          const d2 = Black76.delta(Flive, k2, T, r, iv2, isCall);
+          const ok = isCall ? (d2 > 0.03 && d2 < 0.70) : (d2 < -0.03 && d2 > -0.70);
+          if(ok) pts.push([d2, ivPct]);
+        }
+        pts.sort((a,b)=>a[0]-b[0]);
+        for(let i=0;i<pts.length-1;i++){
+          const[d0,v0]=pts[i],[d1,v1]=pts[i+1];
+          if(d0<=targetDelta&&targetDelta<=d1)
+            return Math.abs(d1-d0)<1e-6 ? v0 : v0+(targetDelta-d0)/(d1-d0)*(v1-v0);
+        }
+      }
+      // Fallback: settle CSV
       const k   = findDeltaStrike(targetDelta, isCall);
       const mkt = getChainPx(ticker,k,isCall?'Call':'Put');
       if(!mkt||T<=0) return null;
@@ -1421,44 +2024,31 @@ function loadSurface(){
       return iv ? iv*100 : null;
     }
 
+    if(D.live_smile && D.live_smile[ticker]) _surfHasLive = true;
     const cells = DELTAS.map(d=>getIVatDelta(d.target,d.isCall));
+    // cells[2]=25D Put, cells[6]=25D Call — derive skew from same source as table
+    const _p25 = cells[2], _c25 = cells[6];
+    _surfSkew[ticker] = (_p25 != null && _c25 != null) ? +(_p25 - _c25).toFixed(2) : (D.skew_value[ticker] ?? null);
+
+    const hv = (D.hv_data && D.hv_data[ticker]) || {};
+    const fmtHV = v => v!=null ? (v<2?v*100:v).toFixed(1)+'%' : '—';
 
     tbody.innerHTML += `<tr>
       <td style="font-weight:600;color:var(--acc)">${ticker}</td>
       ${cells.map(v=>`<td class="num">${v!=null?v.toFixed(1)+'%':'—'}</td>`).join('')}
+      <td class="num" style="border-left:1px solid var(--bord2);color:var(--dim)">${fmtHV(hv.hv10)}</td>
+      <td class="num" style="color:var(--dim)">${fmtHV(hv.hv30)}</td>
+      <td class="num" style="color:var(--dim)">${fmtHV(hv.hv60)}</td>
+      <td class="num" style="color:var(--dim)">${fmtHV(hv.hv90)}</td>
     </tr>`;
   }
 
-  // ATM IV history chart (just use atm_iv values per expiry as a bar)
-  const ctxS = document.getElementById('surf-chart').getContext('2d');
-  const colors = ['#E8C547','#3b82f6','#22c55e','#ef4444','#a855f7'];
-  if(surfChart) surfChart.destroy();
-  surfChart = new Chart(ctxS,{
-    type:'bar',
-    data:{
-      labels: D.expiries,
-      datasets:[{
-        label:'ATM IV',
-        data: D.expiries.map(e=>D.atm_iv[e]||null),
-        backgroundColor: D.expiries.map((_,i)=>colors[i%colors.length]+'99'),
-        borderColor:     D.expiries.map((_,i)=>colors[i%colors.length]),
-        borderWidth:2,
-      }]
-    },
-    options:{
-      animation:false,
-      responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false}},
-      scales:{
-        x:{ticks:{color:'#94a3b8'},grid:{color:'#1e2a3a'}},
-        y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'#1e2a3a'},
-           title:{display:true,text:'ATM IV (%)',color:'#4a6080',font:{size:10}}},
-      },
-    }
-  });
+  // Update card title to show live/settle source
+  const _surfTitleEl = document.querySelector('#panel-surface .card-title');
+  if(_surfTitleEl) _surfTitleEl.textContent = _surfHasLive ? 'Vol Surface — Live' : 'Vol Surface — Settle';
 
-  // 25Δ skew per expiry
-  const skewVals = D.expiries.map(e=>D.skew_value[e]??null);
+  // 25Δ skew per expiry — use live-derived value (same source as table) when available
+  const skewVals = D.expiries.map(e=>_surfSkew[e]??D.skew_value[e]??null);
   const ctxK = document.getElementById('skew-chart').getContext('2d');
   if(skewChart) skewChart.destroy();
   skewChart = new Chart(ctxK,{
@@ -1479,7 +2069,7 @@ function loadSurface(){
       plugins:{legend:{display:false}},
       scales:{
         x:{ticks:{color:'#94a3b8'},grid:{color:'#1e2a3a'}},
-        y:{ticks:{color:'#94a3b8',callback:v=>v+'%'},grid:{color:'#1e2a3a'},
+        y:{ticks:{color:'#94a3b8',stepSize:0.5,callback:v=>v+'%'},grid:{color:'#1e2a3a'},
            title:{display:true,text:'Put IV − Call IV (vol pts)',color:'#4a6080',font:{size:10}}},
       },
     }
@@ -1487,12 +2077,510 @@ function loadSurface(){
 
   document.getElementById('surface-loading').style.display='none';
   document.getElementById('surface-content').style.display='block';
+
+  renderMESmile();
 }
 
 // ── Export PNG ────────────────────────────────────────────────────────────────
 function openExport(){
+  // Route to the correct export based on which panel is active
+  const activePanel = document.querySelector('.panel.active');
+  if(activePanel){
+    if(activePanel.id === 'panel-trade')   { exportTradePanel();   return; }
+    if(activePanel.id === 'panel-surface') { exportSurfacePanel(); return; }
+    if(activePanel.id === 'panel-skew')    { openSkewExport();     return; }
+  }
+  // Default: smile panel export — sync expiry and open modal
   document.getElementById('exp-client').value = document.getElementById('client-ref').value||'';
+  const cur = document.getElementById('smile-expiry').value || activeExpiry;
+  if(cur) document.getElementById('exp-expiry').value = cur;
   document.getElementById('export-modal').classList.add('open');
+}
+
+// ── Straddle info helpers (shared by all export functions) ────────────────────
+const _STRIP_H = 44;
+
+function _stradInfo(ticker){
+  const iv = D.atm_iv && D.atm_iv[ticker];
+  if(iv == null) return null;
+  const F = (D.live_smile_fwd && D.live_smile_fwd[ticker]) || D.futures[ticker];
+  if(!F) return null;
+  const dte = getDTE(ticker, D.last_date);
+  if(dte <= 0) return null;
+  const T = dte / 365, r = getRFR(), sig = iv / 100;
+  const lsm = D.live_smile && D.live_smile[ticker];
+  const lsKeys = lsm ? Object.keys(lsm).map(Number) : null;
+  const atmK = lsKeys
+    ? lsKeys.reduce((a, b) => Math.abs(b - F) < Math.abs(a - F) ? b : a)
+    : (D.atm_strike && D.atm_strike[ticker]);
+  if(!atmK) return null;
+  const callPx = Black76.price(F, atmK, T, r, sig, true);
+  if(callPx == null) return null;
+  const strad = 2 * callPx - (F - atmK) * Math.exp(-r * T);
+  return { iv, strad, K: atmK, F, isLive: !!lsm };
+}
+
+function _drawStradStrip(cx, ticker, x, y, w){
+  const GOLD='#c9a227', WHITE='#ffffff', MUTED='#6b7280', GREEN='#22c55e';
+  const B = n=>`bold ${n}px Arial,sans-serif`, N = n=>`${n}px Arial,sans-serif`;
+  const sd = _stradInfo(ticker);
+
+  cx.fillStyle = '#16243a';
+  cx.fillRect(x, y, w, _STRIP_H);
+  cx.strokeStyle = '#2a3f5a'; cx.lineWidth = 0.5;
+  cx.beginPath(); cx.moveTo(x, y+_STRIP_H); cx.lineTo(x+w, y+_STRIP_H); cx.stroke();
+
+  // Left: ATM IV
+  cx.textAlign = 'left';
+  cx.fillStyle = MUTED; cx.font = N(9);
+  cx.fillText('ATM IMPLIED VOL', x+16, y+13);
+  const ivStr = sd ? sd.iv.toFixed(1)+'%' : (D.atm_iv[ticker] != null ? D.atm_iv[ticker].toFixed(1)+'%' : '—');
+  cx.fillStyle = (sd && sd.isLive) ? GREEN : WHITE; cx.font = B(18);
+  cx.fillText(ivStr, x+16, y+34);
+  const ivW = cx.measureText(ivStr).width;
+  cx.font = N(9); cx.fillStyle = (sd && sd.isLive) ? GREEN : MUTED;
+  cx.fillText((sd && sd.isLive) ? '  LIVE' : '  SETTLE', x+16+ivW, y+34);
+
+  // Center: contract identifier
+  const expLabel = (D.expiry_labels && D.expiry_labels[ticker]) || '';
+  cx.textAlign = 'center';
+  cx.fillStyle = WHITE; cx.font = B(13);
+  cx.fillText(ticker, x+w/2, y+19);
+  if(expLabel){ cx.fillStyle = MUTED; cx.font = N(10); cx.fillText(expLabel, x+w/2, y+34); }
+
+  // Right: Straddle value
+  const stradStr = sd ? sd.strad.toFixed(2)+'¢' : '—';
+  cx.textAlign = 'right';
+  cx.fillStyle = MUTED; cx.font = N(9);
+  cx.fillText('ATM STRADDLE', x+w-16, y+13);
+  cx.fillStyle = GOLD; cx.font = B(18);
+  cx.fillText(stradStr, x+w-16, y+34);
+
+  cx.textAlign = 'left';
+}
+
+function exportTradePanel(){
+  const ticker  = document.getElementById('smile-expiry').value || activeExpiry;
+  const dateStr = D.last_date || '';
+  const lf0 = (D.live_futures && D.live_futures[ticker]) || {};
+  const ftPx = (lf0.last > 0 ? lf0.last : null) || D.futures[ticker];
+
+  const W=840, SCALE=2, PAD=20;
+  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
+  const DARK='#111827', MUTED='#6b7280', BORDER='#d1d5db';
+  const GREEN='#16a34a', RED='#dc2626';
+  const B=n=>`bold ${n}px Arial,sans-serif`;
+  const N=n=>`${n}px Arial,sans-serif`;
+
+  // Collect scenario table HTML to measure rows
+  const r0 = getRFR();
+  const hasPos = legs.length > 0;
+  const legRowH = 24, legHdrH = 28;
+  const legCount = legs.length;
+  const scenRowH = 26, scenColH = 30;
+  const scenRows = PRICE_SHIFTS.length, scenCols = VOL_SHIFTS.length;
+
+  const hdrH=64, kpiH=84;
+  const legSecH = hasPos ? 32 + legHdrH + legCount*legRowH + 8 : 0;
+  const scenSecH = hasPos ? 32 + scenColH + scenRows*scenRowH + 8 : 0;
+  const greeksSecH = hasPos ? 32 + 60 : 0;
+  const footH = 30;
+  const H = hdrH + _STRIP_H + 8 + kpiH + (legSecH?8+legSecH:0) + (scenSecH?8+scenSecH:0) + (greeksSecH?8+greeksSecH:0) + 8 + footH;
+
+  const cnv = document.createElement('canvas');
+  cnv.width=W*SCALE; cnv.height=H*SCALE;
+  const cx = cnv.getContext('2d');
+  cx.scale(SCALE, SCALE);
+
+  cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
+
+  // Header
+  cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
+  cx.fillStyle=GOLD; cx.font=B(18); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES', PAD, 30);
+  cx.fillStyle='#94a3b8'; cx.font=N(12);
+  cx.fillText('CT Options Analytics — Trade Analyzer', PAD, 50);
+  cx.textAlign='right';
+  cx.fillStyle=WHITE; cx.font=B(18);
+  cx.fillText(ticker+(ftPx?' — '+ftPx.toFixed(2)+'¢':''), W-PAD, 30);
+  cx.fillStyle='#94a3b8'; cx.font=N(11);
+  cx.fillText('As of: '+dateStr, W-PAD, 50);
+  cx.textAlign='left';
+
+  _drawStradStrip(cx, ticker, 0, hdrH, W);
+  let y = hdrH+_STRIP_H+8;
+
+  // KPI tiles (same as smile export)
+  const pct=D.iv_percentile[ticker], d1c=D.atm_iv_1d_chg[ticker];
+  const kpiDefs=[
+    {lbl:'ATM IV',   val:D.atm_iv[ticker]!=null?D.atm_iv[ticker].toFixed(1)+'%':'—', clr:DARK},
+    {lbl:'1D CHG',   val:d1c!=null?(d1c>=0?'+':'')+d1c.toFixed(2)+' pts':'—', clr:d1c>0?GREEN:d1c<0?RED:DARK},
+    {lbl:'IV %ILE',  val:pct!=null?pct+'th %ile':'—', clr:pct==null?DARK:pct<30?GREEN:pct<70?'#d97706':RED},
+    {lbl:'25Δ SKEW', val:D.skew_direction[ticker]||'—',
+     clr:D.skew_direction[ticker]==='PUTS BID'?RED:D.skew_direction[ticker]==='CALLS BID'?GREEN:'#d97706'},
+    {lbl:'C/P OI',   val:D.cp_ratio[ticker]!=null?D.cp_ratio[ticker].toFixed(2):'—', clr:DARK},
+  ];
+  const gap=5, tileW=Math.floor((W-PAD*2-gap*4)/5);
+  kpiDefs.forEach(({lbl,val,clr},i)=>{
+    const tx=PAD+i*(tileW+gap);
+    cx.fillStyle=LIGHT; cx.fillRect(tx,y,tileW,kpiH);
+    cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(tx,y,tileW,kpiH);
+    cx.fillStyle=MUTED; cx.font=B(10); cx.textAlign='left';
+    cx.fillText(lbl.toUpperCase(), tx+12, y+20);
+    cx.fillStyle=clr; let fs=24; cx.font=B(fs);
+    while(cx.measureText(val).width>tileW-20&&fs>13){fs--;cx.font=B(fs);}
+    cx.fillText(val, tx+12, y+kpiH-16);
+  });
+  cx.textAlign='left';
+  y+=kpiH;
+
+  if(hasPos){
+    // Trade legs section
+    y+=8;
+    cx.fillStyle=NAVY; cx.fillRect(PAD,y,W-PAD*2,32);
+    cx.fillStyle=GOLD; cx.font=B(11);
+    const clientRef = document.getElementById('client-ref').value;
+    cx.fillText('◆  TRADE LEGS'+(clientRef?' — '+clientRef:''), PAD+12, y+21);
+    y+=32;
+    const legCols=['EXPIRY','C/P','STRIKE','LOTS','L/S','ENTRY PX','MKT PX','IV'];
+    const legCW=(W-PAD*2)/legCols.length;
+    cx.fillStyle=NAVY; cx.fillRect(PAD,y,W-PAD*2,legHdrH);
+    cx.fillStyle='#94a3b8'; cx.font=B(10); cx.textAlign='left';
+    legCols.forEach((h,i)=>cx.fillText(h, PAD+10+i*legCW, y+legHdrH-10));
+    y+=legHdrH;
+    legs.forEach((leg,ri)=>{
+      const F2=getFwdOverride(leg.expiry);
+      const dte2=getDTE(leg.expiry,D.last_date); const T2=dte2/365;
+      let mktPx='—', ivStr='—';
+      if(!leg.isFutures && T2>0){
+        const mkt=getChainPx(leg.expiry,leg.strike,leg.cp==='CALL'?'Call':'Put');
+        if(mkt){
+          mktPx=mkt.toFixed(2);
+          const iv2=Black76.impliedVol(mkt,F2,leg.strike,T2,r0,leg.cp==='CALL');
+          if(iv2) ivStr=(iv2*100).toFixed(1)+'%';
+        }
+      }
+      cx.fillStyle=ri%2===0?WHITE:LIGHT; cx.fillRect(PAD,y,W-PAD*2,legRowH);
+      cx.strokeStyle=BORDER; cx.lineWidth=0.5;
+      cx.beginPath(); cx.moveTo(PAD,y+legRowH); cx.lineTo(W-PAD,y+legRowH); cx.stroke();
+      const legVals=[leg.expiry, leg.isFutures?'FUT':leg.cp, leg.isFutures?'—':leg.strike.toFixed(0),
+        leg.lots, leg.ls, leg.entryPx?leg.entryPx.toFixed(2):'—', mktPx, ivStr];
+      legVals.forEach((v,i)=>{
+        cx.fillStyle=DARK; cx.font=i===4?(leg.ls==='LONG'?B(11):B(11)):N(11);
+        cx.fillStyle=i===4?(leg.ls==='LONG'?GREEN:RED):DARK;
+        cx.textAlign='left'; cx.fillText(String(v), PAD+10+i*legCW, y+legRowH-7);
+      });
+      y+=legRowH;
+    });
+
+    // Net Greeks
+    y+=8;
+    cx.fillStyle=NAVY; cx.fillRect(PAD,y,W-PAD*2,32);
+    cx.fillStyle=GOLD; cx.font=B(11); cx.fillText('◆  NET GREEKS', PAD+12, y+21);
+    y+=32;
+    const gList=legs.map(leg=>computeGreeks(leg,null)).filter(Boolean);
+    if(gList.length){
+      const nd=gList.reduce((s,g)=>s+g.delta,0);
+      const nt=gList.reduce((s,g)=>s+g.theta,0);
+      const nv=gList.reduce((s,g)=>s+g.vega,0);
+      const ng=gList.reduce((s,g)=>s+g.gamma,0);
+      const gDefs=[['Δ DELTA',nd.toFixed(4)],['Θ THETA/DAY',nt.toFixed(3)+'¢'],['ν VEGA',nv.toFixed(3)+'¢'],['Γ GAMMA',ng.toFixed(5)]];
+      const gW=(W-PAD*2)/4;
+      cx.fillStyle=LIGHT; cx.fillRect(PAD,y,W-PAD*2,60);
+      cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,y,W-PAD*2,60);
+      gDefs.forEach(([lbl,val],i)=>{
+        const gx=PAD+i*gW+14;
+        cx.fillStyle=MUTED; cx.font=B(10); cx.textAlign='left'; cx.fillText(lbl,gx,y+20);
+        cx.fillStyle=GOLD; let gf=20; cx.font=B(gf);
+        while(cx.measureText(val).width>gW-20&&gf>12){gf--;cx.font=B(gf);}
+        cx.fillText(val,gx,y+52);
+      });
+      y+=60;
+    }
+  } else {
+    y+=16;
+    cx.fillStyle=MUTED; cx.font=N(13); cx.textAlign='center';
+    cx.fillText('No position entered — add legs in Trade Builder to see scenario analysis', W/2, y+20);
+    cx.textAlign='left'; y+=40;
+  }
+
+  // Footer
+  y+=8;
+  cx.fillStyle=LIGHT; cx.fillRect(0,y,W,footH);
+  cx.strokeStyle=BORDER; cx.lineWidth=1; cx.beginPath(); cx.moveTo(0,y); cx.lineTo(W,y); cx.stroke();
+  cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES LTD — FOR DISCUSSION PURPOSES ONLY', PAD, y+20);
+  cx.textAlign='right'; cx.fillText(dateStr, W-PAD, y+20); cx.textAlign='left';
+
+  try{
+    const link=document.createElement('a');
+    link.download='VLM_CT_Trade_'+ticker+'_'+dateStr+'.png';
+    link.href=cnv.toDataURL('image/png'); link.click();
+  }catch(e){ alert('Export failed: '+e.message); }
+}
+
+function exportSurfacePanel(){
+  const dateStr = D.last_date || '';
+  const r0 = getRFR();
+  const selTicker = document.getElementById('surface-expiry').value || D.expiries[0];
+
+  // ── Recompute surface data (mirrors loadSurface logic) ─────────────────────
+  const DELTAS = [
+    {label:'10Δ Put', target:-0.10, isCall:false},
+    {label:'15Δ Put', target:-0.15, isCall:false},
+    {label:'25Δ Put', target:-0.25, isCall:false},
+    {label:'35Δ Put', target:-0.35, isCall:false},
+    {label:'ATM',     target:null,  isCall:null},
+    {label:'35Δ Call',target: 0.35, isCall:true},
+    {label:'25Δ Call',target: 0.25, isCall:true},
+    {label:'15Δ Call',target: 0.15, isCall:true},
+    {label:'10Δ Call',target: 0.10, isCall:true},
+  ];
+
+  const surfRows = [];
+  let _exportHasLive = false;
+  for(const ticker of D.expiries){
+    const Fsettle = D.futures[ticker];
+    const lsm     = D.live_smile && D.live_smile[ticker];
+    const F       = (D.live_smile_fwd && D.live_smile_fwd[ticker]) || Fsettle;
+    const atm = D.atm_strike[ticker];
+    const lt  = D.last_trade[ticker];
+    if(!Fsettle || !lt) continue;
+    const dte = getDTE(ticker, D.last_date);
+    const T   = dte/365;
+    if(T <= 0) continue;
+    const avail = [...new Set(D.options_today.filter(r=>r.ticker===ticker).map(r=>r.strike))].sort((a,b)=>a-b);
+    const sg = (D.atm_iv[ticker]||20)/100;
+
+    function findDK(tgt, isC){
+      let bK=atm, bD=Infinity;
+      for(const k of avail){
+        const mkt=getChainPx(ticker,k,isC?'Call':'Put');
+        const sig=mkt&&T>0?(Black76.impliedVol(mkt,F,k,T,r0,isC)||sg):sg;
+        const diff=Math.abs(Black76.delta(F,k,T,r0,sig,isC)-tgt);
+        if(diff<bD){bD=diff;bK=k;}
+      }
+      return bK;
+    }
+    function ivAtDelta(tgt, isC){
+      if(tgt===null) return D.atm_iv[ticker];
+      // Prefer live smile (same logic as loadSurface getIVatDelta)
+      if(lsm && T > 0){
+        const pts = [];
+        for(const [kStr, ivPct] of Object.entries(lsm)){
+          const k2=Number(kStr), iv2=ivPct/100;
+          const d2=Black76.delta(F,k2,T,r0,iv2,isC);
+          const ok=isC?(d2>0.03&&d2<0.70):(d2<-0.03&&d2>-0.70);
+          if(ok) pts.push([d2,ivPct]);
+        }
+        pts.sort((a,b)=>a[0]-b[0]);
+        for(let i=0;i<pts.length-1;i++){
+          const[d0,v0]=pts[i],[d1,v1]=pts[i+1];
+          if(d0<=tgt&&tgt<=d1) return Math.abs(d1-d0)<1e-6?v0:v0+(tgt-d0)/(d1-d0)*(v1-v0);
+        }
+      }
+      const k=findDK(tgt,isC);
+      const mkt=getChainPx(ticker,k,isC?'Call':'Put');
+      if(!mkt||T<=0) return null;
+      const iv=Black76.impliedVol(mkt,F,k,T,r0,isC);
+      return iv?iv*100:null;
+    }
+
+    if(lsm) _exportHasLive = true;
+    const cells = DELTAS.map(d=>ivAtDelta(d.target, d.isCall));
+    const hv    = (D.hv_data && D.hv_data[ticker]) || {};
+    const _ep25=cells[2], _ec25=cells[6];
+    const skew = (_ep25!=null&&_ec25!=null) ? +(_ep25-_ec25).toFixed(2) : (D.skew_value[ticker]??null);
+    surfRows.push({ticker, cells, hv, skew, atm_iv: D.atm_iv[ticker]});
+  }
+
+  // ── Canvas setup ───────────────────────────────────────────────────────────
+  const W=840, SCALE=2, PAD=20;
+  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
+  const DARK='#111827', MUTED='#6b7280', BORDER='#d1d5db';
+  const GREEN='#16a34a', RED='#dc2626';
+  const B=n=>`bold ${n}px Arial,sans-serif`;
+  const N=n=>`${n}px Arial,sans-serif`;
+
+  const hdrH=64, tblTitleH=32, tblHdrH=28, rowH=22, skewTitleH=32, skewH=130, footH=30;
+  const tblH = tblHdrH + surfRows.length*rowH;
+  const H = hdrH+_STRIP_H+8+tblTitleH+tblH+8+skewTitleH+skewH+8+footH;
+
+  const cnv=document.createElement('canvas');
+  cnv.width=W*SCALE; cnv.height=H*SCALE;
+  const cx=cnv.getContext('2d');
+  cx.scale(SCALE,SCALE);
+
+  cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
+
+  // ── Header ─────────────────────────────────────────────────────────────────
+  cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
+  cx.fillStyle=GOLD; cx.font=B(18); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES', PAD, 30);
+  cx.fillStyle='#94a3b8'; cx.font=N(12);
+  cx.fillText('CT Options Analytics — Vol Surface', PAD, 50);
+  cx.textAlign='right';
+  cx.fillStyle=WHITE; cx.font=B(14);
+  cx.fillText('ICE Cotton No. 2  ·  Delta-Bucket Implied Volatility', W-PAD, 30);
+  cx.fillStyle='#94a3b8'; cx.font=N(11);
+  cx.fillText('As of: '+dateStr, W-PAD, 50);
+  cx.textAlign='left';
+
+  _drawStradStrip(cx, selTicker, 0, hdrH, W);
+  let y = hdrH+_STRIP_H+8;
+
+  // ── Column geometry ────────────────────────────────────────────────────────
+  const tableW = W - PAD*2;       // 800
+  const expW   = 52;
+  const hvDivW = 10;              // visual gap between IV cols and HV cols
+  const hvW    = 40;              // per HV column
+  const ivW    = (tableW - expW - hvDivW - hvW*4) / 9;  // ~57px per IV col
+
+  function colX(ci){
+    if(ci === 0) return PAD;
+    if(ci <= 9)  return PAD + expW + (ci-1)*ivW;
+    return PAD + expW + 9*ivW + hvDivW + (ci-10)*hvW;
+  }
+  function colMid(ci){
+    const w = ci===0?expW : ci<=9?ivW : hvW;
+    return colX(ci) + w/2;
+  }
+
+  // ── Section title ──────────────────────────────────────────────────────────
+  cx.fillStyle=NAVY; cx.fillRect(PAD,y,tableW,tblTitleH);
+  cx.fillStyle=GOLD; cx.font=B(11);
+  cx.fillText('>>  DELTA-BUCKET IMPLIED VOLATILITY  -  ' + (_exportHasLive ? 'LIVE' : 'SETTLE'), PAD+12, y+21);
+  // Column legend right-aligned
+  cx.fillStyle='#94a3b8'; cx.font=N(9); cx.textAlign='right';
+  cx.fillText('HV = Historical Vol (annualised %)', W-PAD-4, y+21);
+  cx.textAlign='left';
+  y+=tblTitleH;
+
+  // ── Table header row ───────────────────────────────────────────────────────
+  cx.fillStyle='#1e3a5f'; cx.fillRect(PAD,y,tableW,tblHdrH);
+
+  // Divider line between IV cols and HV cols
+  const hvDivX = PAD + expW + 9*ivW + hvDivW/2;
+  cx.strokeStyle='#2d4a6a'; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(hvDivX,y); cx.lineTo(hvDivX,y+tblHdrH); cx.stroke();
+
+  const hdrLabels = ['EXPIRY','10D P','15D P','25D P','35D P','ATM','35D C','25D C','15D C','10D C','HV10','HV30','HV60','HV90'];
+  hdrLabels.forEach((lbl,ci)=>{
+    cx.fillStyle = ci===5 ? GOLD : '#94a3b8';
+    cx.font = B(9); cx.textAlign = ci===0 ? 'left' : 'center';
+    const tx = ci===0 ? colX(0)+6 : colMid(ci);
+    cx.fillText(lbl, tx, y+tblHdrH-9);
+  });
+  cx.textAlign='left';
+  y+=tblHdrH;
+
+  // ── Data rows ──────────────────────────────────────────────────────────────
+  const fmtHV = v => v!=null ? (v<2?v*100:v).toFixed(1)+'%' : '—';
+
+  surfRows.forEach((row,ri)=>{
+    cx.fillStyle = ri%2===0 ? WHITE : LIGHT;
+    cx.fillRect(PAD, y, tableW, rowH);
+    cx.strokeStyle=BORDER; cx.lineWidth=0.5;
+    cx.beginPath(); cx.moveTo(PAD,y+rowH); cx.lineTo(W-PAD,y+rowH); cx.stroke();
+
+    // Divider
+    cx.strokeStyle='#e5e7eb';
+    cx.beginPath(); cx.moveTo(hvDivX,y); cx.lineTo(hvDivX,y+rowH); cx.stroke();
+
+    // Expiry label
+    cx.fillStyle=GOLD; cx.font=B(10); cx.textAlign='left';
+    cx.fillText(row.ticker, colX(0)+6, y+rowH-6);
+
+    // IV cells
+    const atmIV = row.atm_iv;
+    row.cells.forEach((v,ci)=>{
+      const isAtm = DELTAS[ci].target===null;
+      const isCall = DELTAS[ci].isCall===true;
+      const isPut  = DELTAS[ci].isCall===false;
+      const txt = v!=null ? v.toFixed(1)+'%' : '—';
+
+      let clr = DARK;
+      if(isAtm) clr = GOLD;
+      else if(v!=null && atmIV!=null){
+        // colour-code vs ATM: calls should be higher (skew), puts may be higher too
+        const diff = v - atmIV;
+        if(Math.abs(diff) > 1.5) clr = diff>0 ? '#b45309' : '#1d4ed8'; // amber vs blue
+      }
+
+      cx.fillStyle=clr; cx.font=isAtm?B(10):N(10); cx.textAlign='center';
+      cx.fillText(txt, colMid(ci+1), y+rowH-6);
+    });
+
+    // HV cells
+    [row.hv.hv10, row.hv.hv30, row.hv.hv60, row.hv.hv90].forEach((v,hi)=>{
+      cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='center';
+      cx.fillText(fmtHV(v), colMid(10+hi), y+rowH-6);
+    });
+
+    y+=rowH;
+  });
+
+  // ── 25Δ Skew bars ──────────────────────────────────────────────────────────
+  y+=8;
+  cx.textAlign='left';
+  cx.fillStyle=NAVY; cx.fillRect(PAD,y,tableW,skewTitleH);
+  cx.fillStyle=GOLD; cx.font=B(11);
+  cx.fillText('>>  25D SKEW BY EXPIRY  (Put IV - Call IV, vol pts)', PAD+12, y+21);
+  y+=skewTitleH;
+
+  cx.fillStyle=LIGHT; cx.fillRect(PAD,y,tableW,skewH);
+  cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,y,tableW,skewH);
+
+  const skewVals = surfRows.map(r=>r.skew).filter(v=>v!=null);
+  const skewAbs  = skewVals.map(Math.abs);
+  const skewMax  = Math.max(...skewAbs, 1);
+  const bPad=24, totalBarW=tableW-bPad*2;
+  const bw=Math.floor(totalBarW/surfRows.length * 0.65);
+  const bGap=Math.floor(totalBarW/surfRows.length);
+  const skewTopPad=10, skewBotPad=24;
+  const zeroY=y+skewTopPad+(skewH-skewTopPad-skewBotPad)/2;
+  const skewScale=(skewH-skewTopPad-skewBotPad)/2/skewMax;
+
+  // zero line
+  cx.strokeStyle='#d1d5db'; cx.lineWidth=1; cx.setLineDash([3,3]);
+  cx.beginPath(); cx.moveTo(PAD+bPad,zeroY); cx.lineTo(W-PAD-bPad,zeroY); cx.stroke();
+  cx.setLineDash([]);
+
+  surfRows.forEach((row,i)=>{
+    const sv=row.skew; if(sv==null) return;
+    const bx=PAD+bPad+i*bGap+(bGap-bw)/2;
+    const bh=Math.max(2,Math.abs(sv)*skewScale);
+    const by=sv>=0?zeroY-bh:zeroY;
+    cx.fillStyle=sv>0?'rgba(220,38,38,0.75)':'rgba(22,163,74,0.75)';
+    cx.fillRect(bx,by,bw,bh);
+
+    // value label — clamp inside chart bounds
+    cx.fillStyle=sv>0?RED:GREEN; cx.font=B(9); cx.textAlign='center';
+    const vlYraw=sv>=0?by-4:by+bh+11;
+    const vlY=Math.min(vlYraw, y+skewH-skewBotPad+9);
+    cx.fillText((sv>=0?'+':'')+sv.toFixed(1), bx+bw/2, vlY);
+
+    // ticker label
+    cx.fillStyle=DARK; cx.font=B(9);
+    cx.fillText(row.ticker, bx+bw/2, y+skewH-6);
+  });
+  cx.textAlign='left';
+  y+=skewH;
+
+  // ── Footer ─────────────────────────────────────────────────────────────────
+  y+=8;
+  cx.fillStyle=LIGHT; cx.fillRect(0,y,W,footH);
+  cx.strokeStyle=BORDER; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(0,y); cx.lineTo(W,y); cx.stroke();
+  cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES LTD — FOR DISCUSSION PURPOSES ONLY', PAD, y+20);
+  cx.textAlign='right'; cx.fillText(dateStr, W-PAD, y+20); cx.textAlign='left';
+
+  try{
+    const link=document.createElement('a');
+    link.download='VLM_CT_Surface_'+dateStr+'.png';
+    link.href=cnv.toDataURL('image/png'); link.click();
+  }catch(e){ alert('Export failed: '+e.message); }
 }
 function closeExport(){ document.getElementById('export-modal').classList.remove('open'); }
 function setExpOv(mode,el){
@@ -1502,115 +2590,275 @@ function setExpOv(mode,el){
   el.classList.add('active');
 }
 
-async function generatePng(){
+function generatePng(){
   const ticker  = document.getElementById('exp-expiry').value||D.expiries[0]||'CT';
-  const client  = document.getElementById('exp-client').value;
-  const dateStr = D.last_date;
+  const client  = document.getElementById('exp-client').value||'';
+  const dateStr = D.last_date||'';
 
-  // Build export stage HTML
-  const stage = document.getElementById('export-stage');
+  // Live futures price if available, else settle
+  const lf0 = (D.live_futures && D.live_futures[ticker]) || {};
+  const ftPx = (lf0.last > 0 ? lf0.last : null) || (lf0.settle > 0 ? lf0.settle : null) || D.futures[ticker];
 
-  // Capture Chart.js canvases as base64 before html2canvas
-  let smileImgSrc = '';
-  if(smileChart){
-    try{ smileImgSrc = smileChart.toBase64Image(); }catch(e){}
+  // ── Build smile data — reuse the same logic as the main smile chart ──────────
+  const minK = parseFloat(document.getElementById('smile-min').value) || 0;
+  const maxK = parseFloat(document.getElementById('smile-max').value) || Infinity;
+  const dte  = getDTE(ticker, D.last_date);
+
+  function smileToPoints(dateSet){
+    const sd = buildSmileData(ticker, dateSet);
+    return sd.strikes
+      .map((k,i) => sd.ivs[i] != null ? {k, iv: sd.ivs[i]} : null)
+      .filter(d => d && d.k >= minK && d.k <= maxK);
   }
 
-  // Position summary
-  const gList = legs.map(leg=>computeGreeks(leg,null));
-  const nd = gList.filter(Boolean).reduce((s,g)=>s+g.delta,0);
-  const nt = gList.filter(Boolean).reduce((s,g)=>s+g.theta,0);
-  const nv = gList.filter(Boolean).reduce((s,g)=>s+g.vega,0);
-  const legRows = legs.map((l,i)=>{
-    const g = gList[i];
-    const desc = l.isFutures
-      ? `${l.expiry} Futures ${l.ls} ${l.lots} lots`
-      : `${l.expiry} ${(l.strike||0).toFixed(2)} ${l.cp} ${l.ls} ${l.lots} lots`;
-    return `<tr style="border-bottom:1px solid #ddd">
-      <td style="padding:3px 8px">${desc}</td>
-      <td style="padding:3px 8px;text-align:right">${g?g.delta.toFixed(4):'—'}</td>
-      <td style="padding:3px 8px;text-align:right">${g?g.theta.toFixed(4)+'¢':'—'}</td>
-      <td style="padding:3px 8px;text-align:right">${g&&g.iv!=null?g.iv.toFixed(1)+'%':'—'}</td>
-    </tr>`;
-  }).join('');
+  const settleData = smileToPoints('today');
+  const prevData   = smileOverlays.prev ? smileToPoints('prev') : [];
+  const weekData   = smileOverlays.week ? smileToPoints('week') : [];
+  const liveMap    = D.live_smile && D.live_smile[ticker] ? D.live_smile[ticker] : null;
+  const liveData   = liveMap
+    ? Object.entries(liveMap).map(([k,v])=>({k:Number(k),iv:v}))
+        .filter(d=>d.k>=minK&&d.k<=maxK).sort((a,b)=>a.k-b.k)
+    : null;
 
-  stage.innerHTML = `
-  <div style="font-family:Segoe UI,Arial,sans-serif;background:#fff;color:#000;padding:24px;width:1160px">
-    <!-- Header -->
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;
-      border-bottom:2px solid #000;padding-bottom:10px;margin-bottom:14px">
-      <div>
-        <div style="font-size:18px;font-weight:700;letter-spacing:.02em">VLM COMMODITIES LTD</div>
-        <div style="font-size:12px;color:#555;margin-top:2px">Cotton No.2 Options Analytics</div>
-      </div>
-      <div style="text-align:right">
-        <div style="font-size:14px;font-weight:600">CT Options — ${dateStr}</div>
-        ${client?`<div style="font-size:12px;color:#555">Client: ${client}</div>`:''}
-      </div>
-    </div>
-    <!-- Stats bar -->
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
-      ${[
-        ['ATM IV',    D.atm_iv[ticker]!=null?D.atm_iv[ticker].toFixed(1)+'%':'—'],
-        ['1D Chg',    D.atm_iv_1d_chg[ticker]!=null?fmtSgn(D.atm_iv_1d_chg[ticker])+'pts':'—'],
-        ['IV %ile',   D.iv_percentile[ticker]!=null?D.iv_percentile[ticker]+'th':'—'],
-        ['Skew',      D.skew_direction[ticker]||'—'],
-        ['C/P Ratio', D.cp_ratio[ticker]!=null?D.cp_ratio[ticker].toFixed(2):'—'],
-      ].map(([l,v])=>`
-        <div style="background:#f5f5f5;border-radius:4px;padding:8px 10px">
-          <div style="font-size:9px;color:#888;text-transform:uppercase;letter-spacing:.06em">${l}</div>
-          <div style="font-size:16px;font-weight:700;margin-top:2px">${v}</div>
-        </div>`).join('')}
-    </div>
-    <!-- Vol Smile -->
-    ${smileImgSrc?`<div style="margin-bottom:14px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#888;margin-bottom:6px">
-        Vol Smile — ${ticker}</div>
-      <img src="${smileImgSrc}" style="width:100%;max-height:220px;object-fit:contain">
-    </div>`:''}
-    <!-- Position -->
-    ${legs.length?`<div style="margin-bottom:14px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#888;margin-bottom:6px">Position</div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="background:#f0f0f0">
-          <th style="padding:4px 8px;text-align:left">Leg</th>
-          <th style="padding:4px 8px;text-align:right">Delta</th>
-          <th style="padding:4px 8px;text-align:right">Theta/day</th>
-          <th style="padding:4px 8px;text-align:right">IV</th>
-        </tr></thead>
-        <tbody>${legRows}</tbody>
-        <tfoot><tr style="font-weight:700;background:#f5f5f5">
-          <td style="padding:4px 8px">NET</td>
-          <td style="padding:4px 8px;text-align:right">${nd.toFixed(4)}</td>
-          <td style="padding:4px 8px;text-align:right">${nt.toFixed(4)}¢</td>
-          <td style="padding:4px 8px;text-align:right">—</td>
-        </tfoot>
-      </table>
-      <div style="font-size:11px;color:#555;margin-top:6px">
-        Net Δ ${nd.toFixed(4)} · Θ ${nt.toFixed(4)}¢/day · ν ${nv.toFixed(4)}¢/vol pt
-      </div>
-    </div>`:''}
-    <!-- Scenario Grid -->
-    <div>
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#888;margin-bottom:6px">
-        Scenario P&amp;L (¢/lb)</div>
-      ${buildScenarioHtmlTable()}
-    </div>
-    <div style="font-size:9px;color:#aaa;margin-top:16px;border-top:1px solid #eee;padding-top:8px">
-      VLM Commodities LTD · Generated ${new Date().toISOString().slice(0,19).replace('T',' ')} UTC ·
-      For discussion purposes only. Not investment advice.
-    </div>
-  </div>`;
+  // ── Layout constants ───────────────────────────────────────────────────────
+  const W=840, SCALE=2, PAD=20;
+  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
+  const DARK='#111827', MUTED='#6b7280', BORDER='#d1d5db';
+  const GREEN='#16a34a', RED='#dc2626', AMBER='#d97706', BLUE='#3b82f6';
+  const B = n=>`bold ${n}px Arial,sans-serif`;
+  const N = n=>`${n}px Arial,sans-serif`;
 
-  try {
-    const canvas = await html2canvas(stage, {scale:2, useCORS:true, logging:false});
-    const link   = document.createElement('a');
-    link.download = `VLM_CT_Options_${dateStr}.png`;
-    link.href     = canvas.toDataURL('image/png');
+  const hdrH=64, kpiH=84;
+  const hasChart = settleData.length > 2;
+  const chartSecH = hasChart ? 32 + 230 + 8 : 0;  // title bar + chart + gap
+  const top15 = lastTop15 || [];
+  const tblRowH=24, tblHdrH=30, tblTitleH=32;
+  const half = Math.ceil(top15.length/2);
+  const tblSecH = top15.length ? tblTitleH+tblHdrH+half*tblRowH+1 : 0;
+  const footH=30;
+  const H = hdrH + _STRIP_H + 8 + kpiH + (hasChart?8+chartSecH:0) + (tblSecH?8+tblSecH:0) + 8 + footH;
+
+  const cnv = document.createElement('canvas');
+  cnv.width=W*SCALE; cnv.height=H*SCALE;
+  const cx = cnv.getContext('2d');
+  cx.scale(SCALE, SCALE);
+
+  // ── White background ───────────────────────────────────────────────────────
+  cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
+  cx.fillStyle=GOLD; cx.font=B(18); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES', PAD, 30);
+  cx.fillStyle='#94a3b8'; cx.font=N(12);
+  cx.fillText('CT Options Analytics', PAD, 50);
+  cx.textAlign='right';
+  cx.fillStyle=WHITE; cx.font=B(18);
+  cx.fillText(ticker+(ftPx?' — '+ftPx.toFixed(2)+'¢':''), W-PAD, 30);
+  cx.fillStyle='#94a3b8'; cx.font=N(11);
+  cx.fillText('As of: '+dateStr+(client?' · '+client:''), W-PAD, 50);
+  cx.textAlign='left';
+
+  _drawStradStrip(cx, ticker, 0, hdrH, W);
+  let y = hdrH+_STRIP_H+8;
+
+  // ── KPI tiles ─────────────────────────────────────────────────────────────
+  const pct=D.iv_percentile[ticker], d1c=D.atm_iv_1d_chg[ticker];
+  const kpiDefs=[
+    {lbl:'ATM IV',   val:D.atm_iv[ticker]!=null?D.atm_iv[ticker].toFixed(1)+'%':'—',
+                     clr:DARK},
+    {lbl:'1D CHG',   val:d1c!=null?(d1c>=0?'+':'')+d1c.toFixed(2)+' pts':'—',
+                     clr:d1c>0?GREEN:d1c<0?RED:DARK},
+    {lbl:'IV %ILE',  val:pct!=null?pct+'th %ile':'—',
+                     clr:pct==null?DARK:pct<30?GREEN:pct<70?AMBER:RED},
+    {lbl:'25Δ SKEW', val:D.skew_direction[ticker]||'—',
+                     clr:D.skew_direction[ticker]==='PUTS BID'?RED:
+                         D.skew_direction[ticker]==='CALLS BID'?GREEN:AMBER},
+    {lbl:'C/P OI',   val:D.cp_ratio[ticker]!=null?D.cp_ratio[ticker].toFixed(2):'—',
+                     clr:DARK},
+  ];
+  const gap=5, tileW=Math.floor((W-PAD*2-gap*4)/5);
+  kpiDefs.forEach(({lbl,val,clr},i)=>{
+    const tx=PAD+i*(tileW+gap);
+    cx.fillStyle=LIGHT; cx.fillRect(tx,y,tileW,kpiH);
+    cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(tx,y,tileW,kpiH);
+    cx.fillStyle=MUTED; cx.font=B(10); cx.textAlign='left';
+    cx.fillText(lbl.toUpperCase(), tx+12, y+20);
+    cx.fillStyle=clr;
+    let fs=24; cx.font=B(fs);
+    while(cx.measureText(val).width>tileW-20 && fs>13){ fs--; cx.font=B(fs); }
+    cx.fillText(val, tx+12, y+kpiH-16);
+  });
+  cx.textAlign='left';
+  y+=kpiH;
+
+  // ── Vol Smile chart (native redraw) ───────────────────────────────────────
+  if(hasChart){
+    y+=8;
+    cx.fillStyle=NAVY; cx.fillRect(PAD,y,W-PAD*2,32);
+    cx.fillStyle=GOLD; cx.font=B(11);
+    cx.fillText('◆  VOL SMILE — '+ticker+'   ('+dte+' days to expiry)', PAD+12, y+21);
+    y+=32;
+
+    const LM=52, RM=12, TM=10, BM=28; // left/right/top/bottom margin within chart box
+    const cW=W-PAD*2, cH=230;
+    cx.fillStyle=LIGHT; cx.fillRect(PAD,y,cW,cH);
+    cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,y,cW,cH);
+
+    const plotX=PAD+LM, plotY=y+TM, plotW=cW-LM-RM, plotH=cH-TM-BM;
+
+    // IV range
+    const allIVs=[...settleData,...(liveData||[]),...prevData,...weekData].map(d=>d.iv);
+    const ivRaw0=Math.min(...allIVs), ivRaw1=Math.max(...allIVs);
+    const ivPad=(ivRaw1-ivRaw0)*0.12||1.5;
+    const ivLo=Math.floor((ivRaw0-ivPad)*2)/2, ivHi=Math.ceil((ivRaw1+ivPad)*2)/2;
+
+    // Strike range
+    const allKs=[...settleData,...(liveData||[])].map(d=>d.k);
+    const kLo=Math.min(...allKs), kHi=Math.max(...allKs);
+
+    const toX=k  => plotX+(k -kLo)/(kHi-kLo)*plotW;
+    const toY=iv => plotY+plotH-(iv-ivLo)/(ivHi-ivLo)*plotH;
+
+    // Y grid + labels
+    const ivStep=(ivHi-ivLo)>12?2:1;
+    for(let iv=Math.ceil(ivLo);iv<=ivHi;iv+=ivStep){
+      const py=toY(iv); if(py<plotY-1||py>plotY+plotH+1) continue;
+      cx.strokeStyle='#e5e7eb'; cx.lineWidth=0.5; cx.setLineDash([3,3]);
+      cx.beginPath(); cx.moveTo(plotX,py); cx.lineTo(plotX+plotW,py); cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='right';
+      cx.fillText(iv.toFixed(1)+'%', plotX-5, py+4);
+    }
+
+    // X grid + labels
+    const kRange=kHi-kLo;
+    const kStep=kRange>40?5:kRange>20?2:1;
+    const kStart=Math.ceil(kLo/kStep)*kStep;
+    cx.textAlign='center';
+    for(let k=kStart;k<=kHi;k+=kStep){
+      const px=toX(k); if(px<plotX||px>plotX+plotW) continue;
+      cx.strokeStyle='#e5e7eb'; cx.lineWidth=0.5; cx.setLineDash([3,3]);
+      cx.beginPath(); cx.moveTo(px,plotY); cx.lineTo(px,plotY+plotH); cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle=MUTED; cx.font=N(10);
+      cx.fillText(k, px, plotY+plotH+18);
+    }
+    cx.textAlign='left';
+
+    // Draw a smile line
+    function drawSmileLine(data, color, dash, dotR){
+      if(!data||data.length<2) return;
+      cx.beginPath(); cx.strokeStyle=color; cx.lineWidth=2.5;
+      if(dash) cx.setLineDash(dash); else cx.setLineDash([]);
+      data.forEach((d,i)=>{ const px=toX(d.k),py=toY(d.iv); i?cx.lineTo(px,py):cx.moveTo(px,py); });
+      cx.stroke(); cx.setLineDash([]);
+      if(dotR>0){
+        cx.fillStyle=color;
+        data.forEach(d=>{ cx.beginPath(); cx.arc(toX(d.k),toY(d.iv),dotR,0,Math.PI*2); cx.fill(); });
+      }
+    }
+
+    if(weekData.length>2) drawSmileLine(weekData, RED, [5,3], 0);
+    if(prevData.length>2) drawSmileLine(prevData, BLUE, [5,3], 0);
+    drawSmileLine(settleData, '#64748b', [5,3], 0);
+    if(liveData&&liveData.length>2) drawSmileLine(liveData, GOLD, [], 3);
+
+    // Legend
+    const legItems=[];
+    if(liveData&&liveData.length>2) legItems.push({c:GOLD,  lbl:'Live (BBG mid)', dash:false});
+    legItems.push({c:'#64748b', lbl:'Settle', dash:true});
+    if(prevData.length>2) legItems.push({c:BLUE, lbl:'Yesterday', dash:true});
+    if(weekData.length>2) legItems.push({c:RED,  lbl:'1 Week Ago', dash:true});
+    let lx=plotX+10;
+    legItems.forEach(({c,lbl,dash})=>{
+      cx.strokeStyle=c; cx.lineWidth=2.5;
+      if(dash) cx.setLineDash([4,2]); else cx.setLineDash([]);
+      cx.beginPath(); cx.moveTo(lx,plotY+14); cx.lineTo(lx+20,plotY+14); cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle=DARK; cx.font=N(10); cx.textAlign='left';
+      cx.fillText(lbl, lx+25, plotY+18);
+      lx+=cx.measureText(lbl).width+50;
+    });
+
+    y+=cH+8;
+  }
+
+  // ── Top strikes table ──────────────────────────────────────────────────────
+  if(top15.length){
+    y+=8;
+    cx.fillStyle=NAVY; cx.fillRect(PAD,y,W-PAD*2,tblTitleH);
+    cx.fillStyle=GOLD; cx.font=B(11);
+    cx.fillText('◆  TOP STRIKES BY IV CHANGE (1D)', PAD+12, y+21);
+    y+=tblTitleH;
+
+    const colW=(W-PAD*2)/2;
+    const subW=[colW*0.28,colW*0.17,colW*0.22,colW*0.17,colW*0.16];
+    const hdrLabels=['STRIKE','IV','CHG 1D','OI Δ','OI'];
+
+    for(let side=0;side<2;side++){
+      const xBase=PAD+side*colW;
+      cx.fillStyle=NAVY; cx.fillRect(xBase,y,colW,tblHdrH);
+      if(side===0){
+        cx.strokeStyle='#1e3a5f'; cx.lineWidth=0.5;
+        cx.beginPath(); cx.moveTo(xBase+colW,y); cx.lineTo(xBase+colW,y+tblHdrH); cx.stroke();
+      }
+      cx.fillStyle='#94a3b8'; cx.font=B(10); cx.textAlign='left';
+      let hx=xBase+10;
+      hdrLabels.forEach((h,hi)=>{ cx.fillText(h,hx,y+tblHdrH-10); hx+=subW[hi]; });
+    }
+    y+=tblHdrH;
+
+    const half2=Math.ceil(top15.length/2);
+    for(let ri=0;ri<half2;ri++){
+      for(let side=0;side<2;side++){
+        const idx=side===0?ri:ri+half2;
+        if(idx>=top15.length) continue;
+        const rec=top15[idx];
+        const xBase=PAD+side*colW;
+        cx.fillStyle=ri%2===0?WHITE:LIGHT; cx.fillRect(xBase,y,colW,tblRowH);
+        cx.strokeStyle=BORDER; cx.lineWidth=0.5;
+        cx.beginPath(); cx.moveTo(xBase,y+tblRowH); cx.lineTo(xBase+colW,y+tblRowH); cx.stroke();
+        if(side===0){
+          cx.beginPath(); cx.moveTo(xBase+colW,y); cx.lineTo(xBase+colW,y+tblRowH); cx.stroke();
+        }
+        const chgC=rec.ivChg>0?GREEN:rec.ivChg<0?RED:MUTED;
+        const oiC =rec.oiChg>0?GREEN:rec.oiChg<0?RED:MUTED;
+        const cols=[
+          {t:`${rec.k.toFixed(0)} ${rec.side}`, c:DARK,  bold:true},
+          {t:rec.ivNow!=null?rec.ivNow.toFixed(1)+'%':'—', c:DARK},
+          {t:rec.ivChg!=null?(rec.ivChg>=0?'+':'')+rec.ivChg.toFixed(2)+'%':'—', c:chgC, bold:true},
+          {t:rec.oiChg!=null?(rec.oiChg>=0?'+':'')+rec.oiChg.toLocaleString():'—', c:oiC},
+          {t:rec.oi!=null?rec.oi.toLocaleString():'—', c:MUTED},
+        ];
+        let vx=xBase+10;
+        cols.forEach(({t,c,bold},vi)=>{
+          cx.fillStyle=c; cx.font=bold?B(11):N(11); cx.textAlign='left';
+          cx.fillText(t, vx, y+tblRowH-7);
+          vx+=subW[vi];
+        });
+      }
+      y+=tblRowH;
+    }
+  }
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  y+=8;
+  cx.fillStyle=LIGHT; cx.fillRect(0,y,W,footH);
+  cx.strokeStyle=BORDER; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(0,y); cx.lineTo(W,y); cx.stroke();
+  cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES LTD — FOR DISCUSSION PURPOSES ONLY', PAD, y+20);
+  cx.textAlign='right';
+  cx.fillText(dateStr, W-PAD, y+20);
+  cx.textAlign='left';
+
+  try{
+    const link=document.createElement('a');
+    link.download='VLM_CT_'+ticker+'_'+dateStr+'.png';
+    link.href=cnv.toDataURL('image/png');
     link.click();
-  } catch(e){
-    alert('PNG generation failed: '+e.message);
-  }
+  }catch(e){ alert('Export failed: '+e.message); }
   closeExport();
 }
 
@@ -1640,34 +2888,519 @@ function buildScenarioHtmlTable(){
     return tot;
   }));
 
-  const colHdr = ['<th style="padding:4px 6px;background:#e8e8e8">Px \\ Vol</th>',
-    ...VOL_SHIFTS.map(v=>`<th style="padding:4px 6px;background:#e8e8e8">${v>=0?'+':''}${v}v</th>`)].join('');
+  const colHdr = ['<th style="padding:7px 10px;background:#e0e2e8;font-size:12px;font-weight:700">Px \\ Vol</th>',
+    ...VOL_SHIFTS.map(v=>`<th style="padding:7px 10px;background:#e0e2e8;font-size:12px;font-weight:700">${v>=0?'+':''}${v}v</th>`)].join('');
 
-  const dataRows = PRICE_SHIFTS.map((dF,pi)=>{
+  const dataRows = [...PRICE_SHIFTS].reverse().map((dF)=>{
+    const pi = PRICE_SHIFTS.indexOf(dF);
     const cols = VOL_SHIFTS.map((dV,vi)=>{
       const v=cells[pi][vi];
       const isFlat=dF===0&&dV===0;
-      const bg = v>2?'#c6efce':v>0.1?'#e2efda':v<-2?'#ffc7ce':v<-0.1?'#ffeb9c':'#fff';
-      const fw = isFlat?'700':'400';
-      const border = isFlat?'2px solid #000':'';
-      return `<td style="padding:4px 6px;text-align:center;background:${bg};font-weight:${fw};
-        ${border?'outline:'+border+';outline-offset:-2px':''}">
+      const bg = v>2?'#63b76c':v>0.5?'#a8d5a2':v>0.1?'#d4ecd4':v<-2?'#d95959':v<-0.5?'#f09090':v<-0.1?'#f5c6c6':'#f8f8f8';
+      const color = (Math.abs(v)>0.5&&v!=null)?'#000':'#444';
+      return `<td style="padding:7px 10px;text-align:center;background:${bg};color:${color};
+        font-size:13px;font-weight:${isFlat?'800':'600'};
+        ${isFlat?'outline:2px solid #000;outline-offset:-2px':''}">
         ${pnlTxt(v)}</td>`;
     }).join('');
     return `<tr>
-      <td style="padding:4px 8px;background:#e8e8e8;font-weight:600;text-align:right">
+      <td style="padding:7px 10px;background:#e0e2e8;font-weight:700;text-align:right;font-size:13px">
         ${dF>=0?'+':''}${dF}¢</td>${cols}
     </tr>`;
   }).join('');
 
-  return `<table style="border-collapse:collapse;font-size:11px;width:100%">
+  return `<table style="border-collapse:collapse;font-size:13px;width:100%">
     <thead><tr>${colHdr}</tr></thead>
     <tbody>${dataRows}</tbody>
   </table>`;
 }
 
+// ── Skew History ──────────────────────────────────────────────────────────────
+let _skewHistLoaded = false;
+let _skewData        = null;
+let _skewActive      = 'rolling';
+let _skewCharts      = {};
+let _skewChartData   = {};   // {key: {dates, datasets}} — raw data for expand/export
+let _skewExpandChart = null;
+let _skewExportSel   = new Set();
+
+const SKEW_DEFS = [
+  {key:'atm', label:'ATM IV',            cKey:'atm',     pKey:null},
+  {key:'10d', label:'10Δ Call vs Put', cKey:'call_10', pKey:'put_10'},
+  {key:'25d', label:'25Δ Call vs Put', cKey:'call_25', pKey:'put_25'},
+  {key:'35d', label:'35Δ Call vs Put', cKey:'call_35', pKey:'put_35'},
+];
+const C_CALL='#22c55e', C_PUT='#ef4444', C_ATM='#E8C547';
+
+function loadSkewHistory(){
+  if(_skewHistLoaded) return;
+  _skewHistLoaded = true;
+  const st = document.getElementById('skew-hist-status');
+  st.textContent = 'Fetching…';
+  fetch('/api/skew-history?commodity=' + (_currentCommodity||'CT'))
+    .then(r=>r.json())
+    .then(data=>{
+      if(data.error){ st.textContent='Error: '+data.error; _skewHistLoaded=false; return; }
+      _skewData = data;
+      _buildSkewPills(data);
+      _renderAllSkewCharts('rolling');
+      const n = (data.rolling && data.rolling.dates) ? data.rolling.dates.length : 0;
+      st.textContent = n+' trading days';
+    })
+    .catch(()=>{ document.getElementById('skew-hist-status').textContent='Fetch error'; _skewHistLoaded=false; });
+}
+
+function _skewTickerParts(t){
+  const MC={F:1,G:2,H:3,J:4,K:5,M:6,N:7,Q:8,U:9,V:10,X:11,Z:12};
+  if(!t||t.length<4) return [9999,0];
+  return [parseInt(t[3])+2020, MC[t[2]]||0];
+}
+
+function _buildSkewPills(data){
+  const c = document.getElementById('skew-ticker-pills');
+  c.innerHTML = '';
+  const ML={1:'F',2:'G',3:'H',4:'J',5:'K',6:'M',7:'N',8:'Q',9:'U',10:'V',11:'X',12:'Z'};
+  const add = (key, lbl) => {
+    const el = document.createElement('div');
+    el.className = 'pill'+(key===_skewActive?' active':'');
+    el.textContent = lbl; el.dataset.key = key;
+    el.onclick = () => {
+      c.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));
+      el.classList.add('active');
+      _skewActive = key;
+      _renderAllSkewCharts(key);
+    };
+    c.appendChild(el);
+  };
+  add('rolling','ROLLING');
+  Object.keys(data.tickers||{})
+    .sort((a,b)=>{ const [ya,ma]=_skewTickerParts(a),[yb,mb]=_skewTickerParts(b); return ya!==yb?ya-yb:ma-mb; })
+    .forEach(t=>{ const [yr,mo]=_skewTickerParts(t); add(t,(ML[mo]||'?')+String(yr).slice(-1)); });
+}
+
+function _skewSeries(key){ return key==='rolling' ? _skewData.rolling : (_skewData.tickers||{})[key]; }
+
+function _skewOpts(big){
+  return {
+    responsive:true, maintainAspectRatio:false,
+    interaction:{mode:'index',intersect:false},
+    plugins:{
+      legend:{labels:{color:'#94a3b8',font:{size:big?12:11},boxWidth:14,padding:8}},
+      tooltip:{backgroundColor:'#111827',titleColor:'#f8fafc',bodyColor:'#94a3b8',
+        callbacks:{
+          label:c=>`${c.dataset.label}: ${c.raw!=null?c.raw.toFixed(1)+'%':'—'}`,
+          afterBody(items){
+            if(items.length < 2) return [];
+            const c = items[0].raw, p = items[1].raw;
+            if(c==null||p==null) return [];
+            const diff = c - p;
+            const sign = diff >= 0 ? '+' : '';
+            return [`Spread (C−P): ${sign}${diff.toFixed(1)} vol pts`];
+          }
+        }}
+    },
+    scales:{
+      x:{ticks:{color:'#4a6080',font:{size:big?11:10},maxTicksLimit:big?16:10},grid:{color:'#1e2a3a'}},
+      y:{ticks:{color:'#4a6080',font:{size:big?11:10},callback:v=>v+'%'},grid:{color:'#1e2a3a'}}
+    }
+  };
+}
+
+function _skewDatasets(def, series){
+  if(def.key==='atm') return [{label:'ATM',data:series.atm,borderColor:C_ATM,borderWidth:1.5,pointRadius:0,tension:0.2,spanGaps:true}];
+  return [
+    {label:def.label.split(' ')[0]+' Call',data:series[def.cKey],borderColor:C_CALL,borderWidth:1.5,pointRadius:0,tension:0.2,spanGaps:true},
+    {label:def.label.split(' ')[0]+' Put', data:series[def.pKey],borderColor:C_PUT, borderWidth:1.5,pointRadius:0,tension:0.2,spanGaps:true},
+  ];
+}
+
+// Compute live delta-IV point for a ticker using D.options_today + D.futures.
+// Returns {atm, call_10, call_25, call_35, put_10, put_25, put_35} or null.
+// For 'rolling' resolves to the nearest H/K/N/Z with DTE >= 30.
+// Returns null for far-dated contracts not in D.atm_iv (K7+) — they keep settle data.
+function _liveSkewPoint(key){
+  let ticker = key;
+  if(key === 'rolling'){
+    const CT_STD = new Set(['H','K','N','Z']);
+    let best = null, bestDte = Infinity;
+    for(const e of (D.expiries||[])){
+      if(!CT_STD.has(e[2])) continue;
+      const dte = getDTE(e, D.last_date);
+      if(dte >= 30 && dte < bestDte){ bestDte = dte; best = e; }
+    }
+    if(!best) return null;
+    ticker = best;
+  }
+  const atm = D.atm_iv && D.atm_iv[ticker];
+  if(atm == null) return null;   // not a live front contract — skip
+  // Use live smile for delta interpolation (same source as Vol Surface and header IV).
+  // Falls back to null (keeps settle) when live smile is not present (illiquid / back months).
+  const lsm = D.live_smile && D.live_smile[ticker];
+  if(!lsm) return null;
+  const F = (D.live_smile_fwd && D.live_smile_fwd[ticker]) || (D.futures && D.futures[ticker]);
+  if(!F) return null;
+  const dte = getDTE(ticker, D.last_date);
+  if(dte <= 0) return null;
+  const T = dte / 365, r = getRFR();
+  const cPts = [], pPts = [];
+  for(const [kStr, ivPct] of Object.entries(lsm)){
+    const k = Number(kStr), iv = ivPct / 100;
+    const dC = Black76.delta(F, k, T, r, iv, true);
+    const dP = Black76.delta(F, k, T, r, iv, false);
+    if(dC >  0.03 && dC <  0.70) cPts.push([dC,  ivPct]);
+    if(dP < -0.03 && dP > -0.70) pPts.push([dP,  ivPct]);
+  }
+  function interp(pts, tgt){
+    const s = pts.slice().sort((a,b)=>a[0]-b[0]);
+    for(let i=0;i<s.length-1;i++){
+      const[d0,v0]=s[i],[d1,v1]=s[i+1];
+      if(d0<=tgt&&tgt<=d1) return Math.abs(d1-d0)<1e-6?v0:v0+(tgt-d0)/(d1-d0)*(v1-v0);
+    }
+    return null;
+  }
+  const c25=interp(cPts,0.25), p25=interp(pPts,-0.25);
+  if(c25==null||p25==null) return null;
+  const pt = {
+    atm,
+    call_10: interp(cPts, 0.10), call_25: c25, call_35: interp(cPts, 0.35),
+    put_10:  interp(pPts,-0.10), put_25:  p25, put_35:  interp(pPts,-0.35),
+  };
+  // Outlier guard: discard entire live point if any delta IV exceeds 150% of ATM.
+  const cap = atm * 1.5;
+  const vals = [pt.call_10, pt.call_25, pt.call_35, pt.put_10, pt.put_25, pt.put_35];
+  if(vals.some(v => v != null && v > cap)) return null;
+  return pt;
+}
+
+function _renderAllSkewCharts(key){
+  const series = _skewSeries(key);
+  if(!series||!series.dates||!series.dates.length) return;
+
+  // Patch the last data point with live values if that date is today
+  const lastDate = series.dates[series.dates.length - 1];
+  const livePoint = (lastDate === D.last_date) ? _liveSkewPoint(key) : null;
+
+  const ids={atm:'skew-atm-chart','10d':'skew-10d-chart','25d':'skew-25d-chart','35d':'skew-35d-chart'};
+  SKEW_DEFS.forEach(def=>{
+    let datasets = _skewDatasets(def, series);
+    if(livePoint){
+      // Work on shallow-copied arrays so _skewData is not mutated
+      datasets = datasets.map((ds, idx) => {
+        const data = ds.data ? ds.data.slice() : [];
+        const lv = def.key==='atm' ? livePoint.atm
+                 : idx===0 ? livePoint[def.cKey]
+                 :           livePoint[def.pKey];
+        if(lv != null && data.length > 0) data[data.length - 1] = lv;
+        return Object.assign({}, ds, {data});
+      });
+    }
+    _skewChartData[def.key] = {dates:series.dates, datasets};
+    const canvas = document.getElementById(ids[def.key]);
+    if(!canvas) return;
+    if(_skewCharts[def.key]) _skewCharts[def.key].destroy();
+    _skewCharts[def.key] = new Chart(canvas.getContext('2d'),
+      {type:'line', data:{labels:series.dates,datasets}, options:_skewOpts(false)});
+  });
+}
+
+// ── Expand ─────────────────────────────────────────────────────────────────
+function expandSkewChart(key, title){
+  const stored = _skewChartData[key];
+  if(!stored) return;
+  const contract = _skewActive === 'rolling' ? 'Rolling' : _skewActive;
+  document.getElementById('skew-expand-title').textContent = `${title} — ${contract}`;
+  document.getElementById('skew-expand-overlay').classList.add('open');
+  const cv = document.getElementById('skew-expand-canvas');
+  if(_skewExpandChart){ _skewExpandChart.destroy(); _skewExpandChart=null; }
+  _skewExpandChart = new Chart(cv.getContext('2d'), {
+    type:'line',
+    data:{labels:stored.dates, datasets:stored.datasets.map(d=>Object.assign({},d))},
+    options:_skewOpts(true)
+  });
+}
+
+function closeSkewExpand(e){
+  if(e && e.target!==document.getElementById('skew-expand-overlay')) return;
+  document.getElementById('skew-expand-overlay').classList.remove('open');
+  if(_skewExpandChart){ _skewExpandChart.destroy(); _skewExpandChart=null; }
+}
+function closeSkewExpandBtn(){
+  document.getElementById('skew-expand-overlay').classList.remove('open');
+  if(_skewExpandChart){ _skewExpandChart.destroy(); _skewExpandChart=null; }
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────
+function _skewTickerLabel(){
+  if(_skewActive==='rolling') return 'Rolling Front-Month';
+  const ML={1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'};
+  const MC={F:1,G:2,H:3,J:4,K:5,M:6,N:7,Q:8,U:9,V:10,X:11,Z:12};
+  const mo=MC[_skewActive[2]], yr=parseInt(_skewActive[3])+2020;
+  return (ML[mo]||'')+' '+yr;
+}
+
+function openSkewExport(){
+  _skewExportSel.clear();
+  const grid = document.getElementById('skew-exp-grid');
+  grid.innerHTML = '';
+  SKEW_DEFS.forEach(def=>{
+    const stored = _skewChartData[def.key];
+    if(!stored) return;
+    const tile = document.createElement('div');
+    tile.className = 'skew-exp-tile';
+    tile.dataset.key = def.key;
+    tile.innerHTML = `<div class="etlbl">${def.label}</div><div class="etsub">${stored.dates.length} dates &nbsp;&middot;&nbsp; ${_skewTickerLabel()}</div>`;
+    tile.onclick = (e)=>{
+      if(e.ctrlKey||e.metaKey){
+        tile.classList.toggle('sel');
+        tile.classList.contains('sel') ? _skewExportSel.add(def.key) : _skewExportSel.delete(def.key);
+      } else {
+        grid.querySelectorAll('.skew-exp-tile').forEach(t=>{ t.classList.remove('sel'); _skewExportSel.delete(t.dataset.key); });
+        tile.classList.add('sel'); _skewExportSel.add(def.key);
+      }
+    };
+    grid.appendChild(tile);
+  });
+  document.getElementById('skew-export-modal').classList.add('open');
+}
+
+function closeSkewExport(){ document.getElementById('skew-export-modal').classList.remove('open'); }
+
+function generateSkewPngs(){
+  if(!_skewExportSel.size){ alert('Select at least one chart.'); return; }
+  closeSkewExport();
+  _skewExportSel.forEach(key=>{
+    const def = SKEW_DEFS.find(d=>d.key===key);
+    if(!def) return;
+    const cnv = _drawSkewPng(key, def.label);
+    if(!cnv) return;
+    const a = document.createElement('a');
+    a.href = cnv.toDataURL('image/png');
+    const slug = _skewActive.replace('CT','').toLowerCase()||'rolling';
+    a.download = `ct_skew_${slug}_${key}_${D.last_date||''}.png`;
+    a.click();
+  });
+}
+
+function _fmtDL(d){ // 'YYYY-MM-DD' -> "Mon'YY"
+  if(!d||d.length<7) return d||'';
+  const M=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return M[parseInt(d.substring(5,7))]+"’"+d.substring(2,4);
+}
+
+function _drawSkewPng(key, title){
+  const stored = _skewChartData[key];
+  if(!stored||!stored.dates.length) return null;
+
+  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
+  const DARK='#1a1a1a', MUTED='#6b7280', BORDER='#d1d5db', GRID='#e5e7eb';
+  const B=n=>`bold ${n}px Arial,sans-serif`, NF=n=>`${n}px Arial,sans-serif`;
+  const SCALE=2, W=920, PAD=24, hdrH=64, footH=52;
+  const chartH=310, H=hdrH+_STRIP_H+16+chartH+24+footH;
+
+  const cnv=document.createElement('canvas');
+  cnv.width=W*SCALE; cnv.height=H*SCALE;
+  const cx=cnv.getContext('2d');
+  cx.scale(SCALE,SCALE);
+
+  // White bg
+  cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
+
+  // Header
+  cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
+  cx.fillStyle=GOLD; cx.font=B(17); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES',PAD,27);
+  cx.fillStyle='#94a3b8'; cx.font=NF(11);
+  cx.fillText('CT Options  ·  Skew History',PAD,47);
+  cx.fillStyle=WHITE; cx.font=B(15); cx.textAlign='right';
+  cx.fillText(_skewTickerLabel()+' — '+title.replace('vs','vs'),W-PAD,27);
+  const dates=stored.dates;
+  cx.fillStyle='#94a3b8'; cx.font=NF(11);
+  cx.fillText((dates.length?_fmtDL(dates[0])+' → '+_fmtDL(dates[dates.length-1]):'')+
+    '  ('+dates.length+' days)',W-PAD,47);
+  cx.textAlign='left';
+
+  // Straddle strip — resolve ticker from _skewActive
+  const _skewStripTkr = _skewActive === 'rolling'
+    ? (D.expiries || []).find(e => D.atm_iv && D.atm_iv[e] != null) || null
+    : _skewActive;
+  if(_skewStripTkr) _drawStradStrip(cx, _skewStripTkr, 0, hdrH, W);
+
+  // Chart box
+  const LM=52,RM=14,TM=16,BM=46;
+  const cy=hdrH+_STRIP_H+16, cW=W-PAD*2;
+  cx.fillStyle=LIGHT; cx.fillRect(PAD,cy,cW,chartH);
+  cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,cy,cW,chartH);
+  const px0=PAD+LM, py0=cy+TM, pw=cW-LM-RM, ph=chartH-TM-BM;
+
+  // Y range
+  const allV=[];
+  stored.datasets.forEach(ds=>ds.data.forEach(v=>{if(v!=null)allV.push(v);}));
+  if(!allV.length) return null;
+  const vMin=Math.min(...allV),vMax=Math.max(...allV);
+  const vPad=Math.max((vMax-vMin)*0.12,0.5);
+  const vLo=Math.floor((vMin-vPad)*2)/2, vHi=Math.ceil((vMax+vPad)*2)/2;
+  const n=dates.length;
+  const toX=i=>px0+(n>1?i/(n-1)*pw:pw/2);
+  const toY=v=>py0+ph-(v-vLo)/(vHi-vLo)*ph;
+
+  // Y gridlines + labels
+  const vR=vHi-vLo, vStep=vR>20?5:vR>10?2:1;
+  for(let v=Math.ceil(vLo/vStep)*vStep;v<=vHi;v+=vStep){
+    const y=toY(v); if(y<py0-1||y>py0+ph+1) continue;
+    cx.strokeStyle=GRID; cx.lineWidth=0.5; cx.setLineDash([3,3]);
+    cx.beginPath(); cx.moveTo(px0,y); cx.lineTo(px0+pw,y); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle=MUTED; cx.font=NF(10); cx.textAlign='right';
+    cx.fillText(v.toFixed(1)+'%',px0-6,y+4);
+  }
+
+  // X gridlines + date labels (12 evenly spaced)
+  const nLbl=Math.min(12,n), lStep=Math.max(1,Math.floor(n/nLbl));
+  cx.textAlign='center';
+  for(let i=0;i<n;i+=lStep){
+    const x=toX(i);
+    cx.strokeStyle=GRID; cx.lineWidth=0.3; cx.setLineDash([2,4]);
+    cx.beginPath(); cx.moveTo(x,py0); cx.lineTo(x,py0+ph); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle=MUTED; cx.font=NF(9); cx.fillText(_fmtDL(dates[i]),x,py0+ph+18);
+  }
+  cx.textAlign='left';
+
+  // Draw series lines
+  stored.datasets.forEach(ds=>{
+    if(!ds.data) return;
+    cx.save(); cx.strokeStyle=ds.borderColor||'#999'; cx.lineWidth=2.5; cx.setLineDash([]);
+    cx.beginPath(); let started=false;
+    for(let i=0;i<n;i++){
+      const v=ds.data[i]; if(v==null){started=false;continue;}
+      const x=toX(i),y=toY(v);
+      started?cx.lineTo(x,y):cx.moveTo(x,y); started=true;
+    }
+    cx.stroke(); cx.restore();
+  });
+
+  // Legend (centred below chart)
+  const legDS=stored.datasets.filter(ds=>ds.data&&ds.data.some(v=>v!=null));
+  cx.font=B(11);
+  const legW=legDS.reduce((s,ds)=>s+36+cx.measureText(ds.label||'').width+16,0);
+  let lx=Math.max(px0,(W-legW)/2);
+  const ly=py0+ph+33;
+  legDS.forEach(ds=>{
+    cx.strokeStyle=ds.borderColor||'#999'; cx.lineWidth=2.5; cx.setLineDash([]);
+    cx.beginPath(); cx.moveTo(lx,ly); cx.lineTo(lx+26,ly); cx.stroke();
+    cx.fillStyle=DARK; cx.font=B(11); cx.textAlign='left';
+    cx.fillText(ds.label||'',lx+30,ly+4);
+    lx+=30+cx.measureText(ds.label||'').width+18;
+  });
+
+  // Latest values + 1d/1w changes
+  function lastNonNull(data){ for(let i=data.length-1;i>=0;i--){ if(data[i]!=null) return data[i]; } return null; }
+  function nthFromLast(data,n){ let c=0; for(let i=data.length-1;i>=0;i--){ if(data[i]!=null){ c++; if(c===n) return data[i]; } } return null; }
+  function fmtChg(v){ if(v==null) return '—'; const s=v>=0?'+':''; return s+v.toFixed(1); }
+  function chgColor(v){ return v==null?MUTED: v>0?'#16a34a': v<0?'#dc2626': MUTED; }
+  const statsY = ly + 22;
+  cx.strokeStyle=BORDER; cx.lineWidth=0.5; cx.setLineDash([]);
+  cx.beginPath(); cx.moveTo(PAD, statsY-10); cx.lineTo(W-PAD, statsY-10); cx.stroke();
+  if(stored.datasets.length >= 2){
+    const cV = lastNonNull(stored.datasets[0].data);
+    const pV = lastNonNull(stored.datasets[1].data);
+    if(cV != null && pV != null){
+      const diff = cV - pV, sign = diff >= 0 ? '+' : '';
+      cx.textAlign = 'center';
+      cx.font = NF(11); cx.fillStyle = MUTED; cx.fillText('Latest:', PAD+36, statsY+3);
+      cx.font = B(12);
+      cx.fillStyle = C_CALL; cx.fillText(stored.datasets[0].label+': '+cV.toFixed(1)+'%', W/2-140, statsY+3);
+      cx.fillStyle = C_PUT;  cx.fillText(stored.datasets[1].label+': '+pV.toFixed(1)+'%', W/2+10,   statsY+3);
+      cx.fillStyle = GOLD;   cx.fillText('C−P: '+sign+diff.toFixed(1)+' vol pts',        W/2+170,  statsY+3);
+      cx.textAlign = 'left';
+    }
+  } else if(stored.datasets.length === 1){
+    const aV = lastNonNull(stored.datasets[0].data);
+    if(aV != null){
+      cx.textAlign = 'center';
+      cx.font = NF(11); cx.fillStyle = MUTED; cx.fillText('Latest:', PAD+36, statsY+3);
+      cx.font = B(12); cx.fillStyle = C_ATM;
+      cx.fillText('ATM IV: '+aV.toFixed(1)+'%', W/2, statsY+3);
+      cx.textAlign = 'left';
+    }
+  }
+
+  // Δ1d / Δ1w change row
+  const chgY = statsY + 22;
+  cx.strokeStyle=BORDER; cx.lineWidth=0.5; cx.setLineDash([]);
+  cx.beginPath(); cx.moveTo(PAD, chgY-10); cx.lineTo(W-PAD, chgY-10); cx.stroke();
+
+  if(stored.datasets.length >= 2){
+    const d0 = stored.datasets[0].data, d1 = stored.datasets[1].data;
+    const c1d = lastNonNull(d0), p1d = lastNonNull(d1);
+    const cPrev1 = nthFromLast(d0,2), pPrev1 = nthFromLast(d1,2);
+    const cPrev5 = nthFromLast(d0,6), pPrev5 = nthFromLast(d1,6);
+    const dC1d = (c1d!=null&&cPrev1!=null)?+(c1d-cPrev1).toFixed(1):null;
+    const dP1d = (p1d!=null&&pPrev1!=null)?+(p1d-pPrev1).toFixed(1):null;
+    const dC1w = (c1d!=null&&cPrev5!=null)?+(c1d-cPrev5).toFixed(1):null;
+    const dP1w = (p1d!=null&&pPrev5!=null)?+(p1d-pPrev5).toFixed(1):null;
+    const sp0=(c1d!=null&&p1d!=null)?c1d-p1d:null;
+    const sp1=(cPrev1!=null&&pPrev1!=null)?cPrev1-pPrev1:null;
+    const sp5=(cPrev5!=null&&pPrev5!=null)?cPrev5-pPrev5:null;
+    const dSp1d=(sp0!=null&&sp1!=null)?+(sp0-sp1).toFixed(1):null;
+    const dSp1w=(sp0!=null&&sp5!=null)?+(sp0-sp5).toFixed(1):null;
+    const lbl0 = stored.datasets[0].label.split(' ')[0];
+    const lbl1 = stored.datasets[1].label.split(' ')[0];
+    // Δ1d section
+    cx.font=NF(10); cx.fillStyle=MUTED; cx.textAlign='left';
+    cx.fillText('Δ 1d', PAD+6, chgY+3);
+    cx.font=B(10);
+    cx.fillStyle=C_CALL; cx.fillText(lbl0+' Call: ', PAD+50, chgY+3);
+    const w0=cx.measureText(lbl0+' Call: ').width;
+    cx.fillStyle=chgColor(dC1d); cx.fillText(fmtChg(dC1d)+'%', PAD+50+w0, chgY+3);
+    cx.fillStyle=C_PUT;  cx.fillText(lbl0+' Put: ', PAD+140, chgY+3);
+    const w1=cx.measureText(lbl0+' Put: ').width;
+    cx.fillStyle=chgColor(dP1d); cx.fillText(fmtChg(dP1d)+'%', PAD+140+w1, chgY+3);
+    cx.fillStyle=GOLD; cx.fillText('C−P: ', PAD+240, chgY+3);
+    const w2=cx.measureText('C−P: ').width;
+    cx.fillStyle=chgColor(dSp1d); cx.fillText(fmtChg(dSp1d), PAD+240+w2, chgY+3);
+    // Δ1w section (right half)
+    const rx=W/2+20;
+    cx.font=NF(10); cx.fillStyle=MUTED;
+    cx.fillText('Δ 1w', rx, chgY+3);
+    cx.font=B(10);
+    cx.fillStyle=C_CALL; cx.fillText(lbl0+' Call: ', rx+44, chgY+3);
+    const w3=cx.measureText(lbl0+' Call: ').width;
+    cx.fillStyle=chgColor(dC1w); cx.fillText(fmtChg(dC1w)+'%', rx+44+w3, chgY+3);
+    cx.fillStyle=C_PUT;  cx.fillText(lbl0+' Put: ', rx+134, chgY+3);
+    const w4=cx.measureText(lbl0+' Put: ').width;
+    cx.fillStyle=chgColor(dP1w); cx.fillText(fmtChg(dP1w)+'%', rx+134+w4, chgY+3);
+    cx.fillStyle=GOLD; cx.fillText('C−P: ', rx+234, chgY+3);
+    const w5=cx.measureText('C−P: ').width;
+    cx.fillStyle=chgColor(dSp1w); cx.fillText(fmtChg(dSp1w), rx+234+w5, chgY+3);
+    cx.textAlign='left';
+  } else if(stored.datasets.length === 1){
+    const d0=stored.datasets[0].data;
+    const v1d=lastNonNull(d0), prev1=nthFromLast(d0,2), prev5=nthFromLast(d0,6);
+    const d1d=(v1d!=null&&prev1!=null)?+(v1d-prev1).toFixed(1):null;
+    const d1w=(v1d!=null&&prev5!=null)?+(v1d-prev5).toFixed(1):null;
+    cx.font=NF(10); cx.fillStyle=MUTED; cx.textAlign='left';
+    cx.fillText('Δ 1d', PAD+6, chgY+3);
+    cx.font=B(11); cx.fillStyle=chgColor(d1d);
+    cx.fillText(fmtChg(d1d)+'%', PAD+50, chgY+3);
+    cx.font=NF(10); cx.fillStyle=MUTED;
+    cx.fillText('Δ 1w', W/2+20, chgY+3);
+    cx.font=B(11); cx.fillStyle=chgColor(d1w);
+    cx.fillText(fmtChg(d1w)+'%', W/2+64, chgY+3);
+    cx.textAlign='left';
+  }
+
+  // Footer
+  cx.fillStyle='#94a3b8'; cx.font=NF(10); cx.textAlign='right';
+  cx.fillText((D.commodity_name||'CT Options')+' Analytics  ·  VLM Commodities  ·  '+(D.last_date||''),W-PAD,H-10);
+  return cnv;
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────
-init();
+const _savedCommod = localStorage.getItem('vlm_commodity');
+if (_savedCommod && _savedCommod !== 'CT' && ['CT','KC','SB','CC'].includes(_savedCommod)) {
+  loadAndRender(_savedCommod);
+} else {
+  init();
+}
 </script>
 </body>
 </html>
