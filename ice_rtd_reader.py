@@ -412,13 +412,26 @@ def detect_mode(wb, prefix, stored_atm_settle=None):
 
 def read_ice_workbook(commodity='CT', stored_atm_settle=None):
     """
-    Main entry point.
+    Main entry point — thread-safe (initialises COM for the calling thread).
 
     commodity         : 'CT', 'KC', 'SB', or 'CC'
     stored_atm_settle : ATM call settle from Bloomberg CSV (for mode detection)
 
     Returns structured dict.  If workbook unavailable: {'mode': 'unavailable'}.
     """
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+        try:
+            return _read_ice_workbook_inner(commodity, stored_atm_settle)
+        finally:
+            pythoncom.CoUninitialize()
+    except ImportError:
+        # pythoncom not available — call directly (non-Flask / non-Windows contexts)
+        return _read_ice_workbook_inner(commodity, stored_atm_settle)
+
+
+def _read_ice_workbook_inner(commodity='CT', stored_atm_settle=None):
     wb = open_workbook(commodity)
     if wb is None:
         return {'mode': 'unavailable'}

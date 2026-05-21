@@ -1,8 +1,16 @@
 from flask import Flask, render_template, jsonify, request
-import os, requests, csv, io, json, time, math, logging
+import os, requests, csv, io, json, time, math, logging, threading
 from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
+
+# ICE RTD — primary live data source
+try:
+    import ice_rtd_reader as _ice_rtd_reader
+except ImportError:
+    _ice_rtd_reader = None
+
+# Bloomberg RTD — kept as inactive backup; not called unless ICE RTD is unavailable
 try:
     import rtd_reader as _rtd_reader
 except ImportError:
@@ -395,6 +403,71 @@ def _kc_opt_expiry(month_num, year):
     return d.strftime('%Y-%m-%d')
 
 
+# ── Daily settle fetch schedule ───────────────────────────────────────────────
+# Fires at SETTLE_FETCH_HOUR:SETTLE_FETCH_MINUTE local machine time.
+# Set to local equivalent of 15:45 ET (e.g. 20:45 for UK BST, 15:45 for US ET).
+SETTLE_FETCH_HOUR   = 20
+SETTLE_FETCH_MINUTE = 45
+
+# ── ICE RTD adapter ───────────────────────────────────────────────────────────
+
+def _ice_to_rtd_shape(ice_data):
+    """
+    Convert read_ice_workbook() output to the shape rtd_reader.read_live() returns
+    so the rest of load_data() is unchanged.
+    Returns None when ICE workbook is unavailable.
+    """
+    if not ice_data or ice_data.get('mode') == 'unavailable':
+        return None
+
+    mode        = ice_data['mode']
+    futures_raw = ice_data.get('futures', {})
+    options_raw = ice_data.get('options', {})
+
+    outrights = {}
+    for tkr, f in futures_raw.items():
+        bid, offer = f.get('bid'), f.get('offer')
+        if mode == 'live' and bid and offer:
+            last = (bid + offer) / 2.0
+        else:
+            last = f.get('last') or f.get('settle')
+        outrights[tkr] = {
+            'last':    last,
+            'settle':  f.get('settle'),
+            'change':  None, 'pct_chg': None,
+            'oi':      f.get('oi'), 'oi_chg': None,
+            'volume':  None, 'high': None, 'low': None,
+            'hv10':    None, 'hv30': None, 'hv60': None, 'hv90': None,
+        }
+
+    live_opts = {}
+    for sheet_name, rows in options_raw.items():
+        ticker  = sheet_name.upper()
+        strikes = []
+        for r in rows:
+            k = r['strike']
+            for pc, bk, ok, lk in [
+                ('Call', 'call_bid', 'call_offer', 'call_last'),
+                ('Put',  'put_bid',  'put_offer',  'put_last'),
+            ]:
+                bid  = r.get(bk)
+                ask  = r.get(ok)
+                last = r.get(lk)
+                mid  = (bid + ask) / 2.0 if (bid and ask and bid > 0 and ask > 0) else last
+                strikes.append({'strike': k, 'pc': pc,
+                                'bid': bid, 'ask': ask, 'mid': mid,
+                                'last': last, 'vol': None})
+        if strikes:
+            live_opts[ticker] = {'expiry': None, 'strikes': strikes}
+
+    return {
+        'outrights':    outrights,
+        'spreads':      {},
+        'live_options': live_opts,
+        'source':       f'ice_rtd_{mode}',
+    }
+
+
 # ── Core data load ────────────────────────────────────────────────────────────
 
 def load_data(commodity='CT'):
@@ -407,13 +480,18 @@ def load_data(commodity='CT'):
     except Exception as e:
         return {'error': str(e)}
 
-    # Live Bloomberg RTD overlay — non-blocking; None if Excel not open / file missing
+    # Live data overlay — ICE RTD primary, Bloomberg RTD backup (inactive unless ICE unavailable)
     rtd = None
-    if _rtd_reader:
+    if _ice_rtd_reader:
+        try:
+            rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook('CT'))
+        except Exception as e:
+            log.debug('ICE RTD fetch skipped: %s', e)
+    if rtd is None and _rtd_reader:
         try:
             rtd = _rtd_reader.read_live()
         except Exception as e:
-            log.debug('RTD fetch skipped: %s', e)
+            log.debug('Bloomberg RTD fallback skipped: %s', e)
 
     # Parse every CT options row upfront — extract ticker, pc, strike from security_des
     ct_opts = []
@@ -1203,6 +1281,306 @@ def _persist_today_generic(commodity):
         log.warning('%s fut persist failed: %s', commodity, e)
 
 
+# ── ICE RTD daily settle persistence ──────────────────────────────────────────
+
+def _read_csv_dates(path):
+    """Return set of 'date' column values already in a CSV file."""
+    dates = set()
+    if not os.path.exists(path):
+        return dates
+    try:
+        with open(path, 'r', newline='', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                d = row.get('date', '').strip()
+                if d:
+                    dates.add(d)
+    except Exception:
+        pass
+    return dates
+
+
+def _contract_code_to_month_year(contract_code, prefix):
+    """'CTN6' → (month_num=7, year=2026). Uses base decade 2020 (consistent with parse_generic_ticker)."""
+    plen = len(prefix)
+    code = contract_code[plen:]
+    if len(code) < 2:
+        return None
+    mc = code[0].upper()
+    month_num = MONTH_CODE.get(mc)
+    if month_num is None:
+        return None
+    try:
+        year = 2020 + int(code[1])
+    except (ValueError, IndexError):
+        return None
+    return month_num, year
+
+
+def _futures_ordinal_contract(month_num, year, today_str, prefix):
+    """Return ordinal contract code matching get_hist_fwd formula, e.g. 'CTJUL1'."""
+    try:
+        d = datetime.strptime(today_str, '%Y-%m-%d')
+    except ValueError:
+        return None
+    first_year = d.year if d.month <= month_num else d.year + 1
+    ordinal = year - first_year + 1
+    if ordinal < 1 or ordinal > 6:
+        return None
+    suffix = FUTURES_MONTH_SUFFIX.get(month_num)
+    if not suffix:
+        return None
+    return f'{prefix}{suffix}{ordinal}'
+
+
+def _build_lt_fn_lookup(fut_path, prefix):
+    """Read existing futures CSV → {(month_num, year): {'last_trade': ..., 'first_notice': ...}}"""
+    lookup = {}
+    if not os.path.exists(fut_path):
+        return lookup
+    try:
+        with open(fut_path, 'r', newline='', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                lt = (row.get('last_trade')   or '').strip()
+                fn = (row.get('first_notice') or '').strip()
+                if not lt and not fn:
+                    continue
+                contract = (row.get('contract') or '').strip()
+                date_s   = (row.get('date')     or '').strip()
+                if not contract or not date_s:
+                    continue
+                res = parse_futures_my_generic(contract, date_s, prefix)
+                if not res:
+                    continue
+                month_num, year = res
+                key = (month_num, year)
+                if key not in lookup:
+                    lookup[key] = {'last_trade': lt or None, 'first_notice': fn or None}
+    except Exception:
+        pass
+    return lookup
+
+
+_CT_OPT_FIELDS      = ['date','commodity','security_des','contract_month','put_call',
+                        'strike_px','open_int','oi_chg','px_settle','px_volume']
+_GENERIC_OPT_FIELDS = ['date','commodity','security_des','strike_px',
+                        'px_settle','open_int','oi_chg','px_volume']
+_FUT_FIELDS         = ['date','commodity','contract','bbg_ticker',
+                        'settle','open_int','oi_chg','first_notice','last_trade']
+
+
+def _persist_ct_options_ice(ice_data, today_str):
+    """Append today's CT option settles from ICE RTD to local_options_history.csv."""
+    options = ice_data.get('options', {})
+    if not options:
+        return 0
+    if today_str in _read_csv_dates(LOCAL_OPT_HISTORY):
+        return 0
+
+    rows = []
+    for sheet_name, chain in options.items():
+        res = _contract_code_to_month_year(sheet_name, 'CT')
+        if not res:
+            continue
+        month_num, year = res
+        contract_month = f'{MONTH_NAME[month_num]} {year}'
+        for r in chain:
+            strike = r.get('strike')
+            if strike is None:
+                continue
+            for pc_char, settle_key, oi_key in [
+                ('C', 'call_settle', 'call_oi'),
+                ('P', 'put_settle',  'put_oi'),
+            ]:
+                px = r.get(settle_key)
+                if px is None:
+                    continue
+                rows.append({
+                    'date':           today_str,
+                    'commodity':      'CT',
+                    'security_des':   f'{sheet_name.upper()}{pc_char}',
+                    'contract_month': contract_month,
+                    'put_call':       pc_char,
+                    'strike_px':      strike,
+                    'open_int':       r.get(oi_key) or '',
+                    'oi_chg':         '',
+                    'px_settle':      round(float(px), 4),
+                    'px_volume':      '',
+                })
+
+    if not rows:
+        return 0
+    need_header = not os.path.exists(LOCAL_OPT_HISTORY)
+    with open(LOCAL_OPT_HISTORY, 'a', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=_CT_OPT_FIELDS)
+        if need_header:
+            w.writeheader()
+        w.writerows(rows)
+    log.info('CT: persisted %d opt rows for %s', len(rows), today_str)
+    return len(rows)
+
+
+def _persist_generic_options_ice(opt_path, commodity, ice_data, today_str):
+    """Append today's option settles from ICE RTD to local_{kc/sb/cc}_options_history.csv."""
+    options = ice_data.get('options', {})
+    if not options:
+        return 0
+    if today_str in _read_csv_dates(opt_path):
+        return 0
+
+    rows = []
+    prefix = commodity.upper()
+    for sheet_name, chain in options.items():
+        for r in chain:
+            strike = r.get('strike')
+            if strike is None:
+                continue
+            for pc_char, settle_key, oi_key in [
+                ('C', 'call_settle', 'call_oi'),
+                ('P', 'put_settle',  'put_oi'),
+            ]:
+                px = r.get(settle_key)
+                if px is None:
+                    continue
+                rows.append({
+                    'date':         today_str,
+                    'commodity':    prefix,
+                    'security_des': f'{sheet_name.upper()}{pc_char}',
+                    'strike_px':    strike,
+                    'px_settle':    round(float(px), 4),
+                    'open_int':     r.get(oi_key) or '',
+                    'oi_chg':       '',
+                    'px_volume':    '',
+                })
+
+    if not rows:
+        return 0
+    need_header = not os.path.exists(opt_path)
+    with open(opt_path, 'a', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=_GENERIC_OPT_FIELDS)
+        if need_header:
+            w.writeheader()
+        w.writerows(rows)
+    log.info('%s: persisted %d opt rows for %s', commodity, len(rows), today_str)
+    return len(rows)
+
+
+def _persist_futures_ice(fut_path, commodity, ice_data, today_str):
+    """Append today's futures settles from ICE RTD to the local futures CSV."""
+    futures = ice_data.get('futures', {})
+    if not futures:
+        return 0
+    if today_str in _read_csv_dates(fut_path):
+        return 0
+
+    prefix  = commodity.upper()
+    lt_fn   = _build_lt_fn_lookup(fut_path, prefix)
+    rows    = []
+    for contract_code, f in futures.items():
+        settle = f.get('settle')
+        if settle is None:
+            continue
+        res = _contract_code_to_month_year(contract_code, prefix)
+        if not res:
+            continue
+        month_num, year = res
+        ordinal_contract = _futures_ordinal_contract(month_num, year, today_str, prefix)
+        if not ordinal_contract:
+            continue
+        lt_fn_info = lt_fn.get((month_num, year), {})
+        rows.append({
+            'date':         today_str,
+            'commodity':    prefix,
+            'contract':     ordinal_contract,
+            'bbg_ticker':   f'{ordinal_contract} Comdty',
+            'settle':       round(float(settle), 4),
+            'open_int':     f.get('oi') or '',
+            'oi_chg':       '',
+            'first_notice': lt_fn_info.get('first_notice') or '',
+            'last_trade':   lt_fn_info.get('last_trade') or '',
+        })
+
+    if not rows:
+        return 0
+    need_header = not os.path.exists(fut_path)
+    with open(fut_path, 'a', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=_FUT_FIELDS)
+        if need_header:
+            w.writeheader()
+        w.writerows(rows)
+    log.info('%s: persisted %d fut rows for %s', commodity, len(rows), today_str)
+    return len(rows)
+
+
+def _persist_ice_all():
+    """Persist today's ICE RTD settle data for all 4 commodities. Idempotent."""
+    today_str = datetime.today().strftime('%Y-%m-%d')
+    results   = {}
+
+    for commodity in ('CT', 'KC', 'SB', 'CC'):
+        try:
+            ice_data = _ice_rtd_reader.read_ice_workbook(commodity) if _ice_rtd_reader else None
+        except Exception as e:
+            log.warning('ICE read failed for %s: %s', commodity, e)
+            ice_data = None
+
+        if not ice_data or ice_data.get('mode') == 'unavailable':
+            results[commodity] = 'unavailable'
+            continue
+
+        cfg   = COMMODITY_CONFIG[commodity]
+        total = 0
+        try:
+            if commodity == 'CT':
+                total += _persist_ct_options_ice(ice_data, today_str)
+            else:
+                total += _persist_generic_options_ice(cfg['opt_csv'], commodity, ice_data, today_str)
+            total += _persist_futures_ice(cfg['fut_csv'], commodity, ice_data, today_str)
+        except Exception as e:
+            log.warning('%s persist error: %s', commodity, e)
+            results[commodity] = f'error: {e}'
+            continue
+        results[commodity] = total
+
+    _skew_hist_cache.clear()
+    log.info('ICE persist complete: %s', results)
+    return results
+
+
+# ── Background settle scheduler ───────────────────────────────────────────────
+
+_settle_timer      = None
+_settle_timer_lock = threading.Lock()
+
+
+def _run_scheduled_fetch():
+    """Called by timer at SETTLE_FETCH_HOUR:SETTLE_FETCH_MINUTE. Persists and reschedules."""
+    log.info('Scheduled settle fetch firing')
+    try:
+        _persist_ice_all()
+    except Exception as e:
+        log.error('Scheduled settle fetch error: %s', e)
+    finally:
+        _schedule_settle_fetch()
+
+
+def _schedule_settle_fetch():
+    """Schedule next settle fetch. Cancels any existing timer first."""
+    global _settle_timer
+    with _settle_timer_lock:
+        if _settle_timer is not None:
+            _settle_timer.cancel()
+        now    = datetime.now()
+        target = now.replace(hour=SETTLE_FETCH_HOUR, minute=SETTLE_FETCH_MINUTE,
+                             second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        delay = (target - now).total_seconds()
+        _settle_timer = threading.Timer(delay, _run_scheduled_fetch)
+        _settle_timer.daemon = True
+        _settle_timer.start()
+        log.info('Next settle fetch in %.0f s (at %s)', delay, target.strftime('%H:%M'))
+
+
 def _load_generic_data(commodity):
     """Load and compute options analytics for KC, SB, or CC (settle-only, no RTD)."""
     cfg        = COMMODITY_CONFIG[commodity]
@@ -1967,7 +2345,12 @@ def api_debug():
         return jsonify({'error': str(e)})
 
     rtd = None
-    if _rtd_reader:
+    if _ice_rtd_reader:
+        try:
+            rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook('CT'))
+        except Exception:
+            pass
+    if rtd is None and _rtd_reader:
         try:
             rtd = _rtd_reader.read_live()
         except Exception:
@@ -2172,6 +2555,18 @@ def api_debug_sheet():
         return jsonify({'error': 'rtd_reader not available'})
     result = _rtd_reader.read_sheet_sample('all options')
     return _no_cache(jsonify(result))
+
+@server.route('/api/fetch-settles', methods=['POST'])
+def api_fetch_settles():
+    """Manual trigger: persist today's ICE RTD settles for all commodities."""
+    try:
+        results = _persist_ice_all()
+        return jsonify({'status': 'ok', 'results': results})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+_schedule_settle_fetch()
 
 if __name__ == '__main__':
     server.run(debug=True, port=5050, use_reloader=True, reloader_type='stat')
