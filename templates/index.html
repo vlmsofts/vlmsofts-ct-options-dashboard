@@ -703,20 +703,23 @@ tr:hover td{background:var(--surf2)}
 
 <!-- ══════════════════════════ PANEL: STRADDLES ══════════════════════════ -->
 <div id="panel-straddles" class="panel">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
     <span id="strad-source" style="color:var(--dim);font-size:11px"></span>
-    <span style="color:var(--dim);font-size:10px">Breakeven = Value ÷ (Strike × √DTE) × 100</span>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span style="color:var(--dim);font-size:10px">Breakeven = Value ÷ (Strike × √DTE) × 100</span>
+      <button class="btn-export" onclick="refreshStraddles()" style="font-size:11px;padding:4px 10px">↻ Refresh</button>
+    </div>
   </div>
   <div style="overflow-x:auto">
-    <table id="strad-table" style="width:100%;border-collapse:collapse;font-size:13px;min-width:760px">
+    <table id="strad-table" style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px">
       <thead>
         <tr>
-          <td colspan="10" style="background:#1a3a6e;color:#fff;font-weight:700;font-size:14px;
+          <td colspan="10" id="strad-title-cell" style="background:#1a3a6e;color:#fff;font-weight:700;font-size:14px;
               text-align:center;padding:9px 12px;letter-spacing:0.04em">
             Cotton Straddles
           </td>
         </tr>
-        <tr id="strad-hdr-row" style="background:#2b63b8;color:#fff">
+        <tr style="background:#2b63b8;color:#fff">
           <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:left;border-right:1px solid rgba(255,255,255,.15)">Contract</th>
           <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">Strike</th>
           <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">Value</th>
@@ -3438,57 +3441,75 @@ if (_savedCommod && _savedCommod !== 'CT' && ['CT','KC','SB','CC'].includes(_sav
 }
 
 // ── Straddles ─────────────────────────────────────────────────────────────────
+function _fmtStradDate(iso){
+  if(!iso) return '—';
+  const [y,m,d] = iso.split('-');
+  return `${+m}/${+d}/${y}`;
+}
+
 function renderStraddles(){
-  const tbody = document.getElementById('strad-tbody');
-  const srcEl = document.getElementById('strad-source');
+  const tbody   = document.getElementById('strad-tbody');
+  const srcEl   = document.getElementById('strad-source');
+  const titleEl = document.getElementById('strad-title-cell');
   if(!tbody) return;
   tbody.innerHTML = '';
 
   const rows = D.straddles;
+
+  // Date stamp in title
+  if(titleEl && D.last_date){
+    const [y,m,d] = D.last_date.split('-');
+    const months = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    titleEl.textContent = `Cotton Straddles — ${+d} ${months[+m]} ${y}`;
+  }
+
   if(!rows || !rows.length){
     tbody.innerHTML = `<tr><td colspan="10" style="color:var(--dim);padding:14px;text-align:center">
-      No straddle data available (CT only)</td></tr>`;
+      No straddle data (CT only — Jul–Dec 2026)</td></tr>`;
     return;
   }
 
-  srcEl.textContent = D.data_source ? `Source: ${D.data_source}  ·  As of ${D.last_date}` : '';
+  const live = D.data_source && D.data_source.includes('live');
+  srcEl.textContent = live ? `Live · ${D.data_source}` : `Settle · ${D.last_date}`;
 
-  const TD_BASE = 'padding:6px 10px;border-bottom:1px solid #dde3ed;font-variant-numeric:tabular-nums';
-  const TD_R    = TD_BASE + ';text-align:right';
-  const TD_L    = TD_BASE + ';text-align:left';
+  const TD  = 'padding:6px 10px;border-bottom:1px solid #dde3ed;font-variant-numeric:tabular-nums';
+  const TDR = TD + ';text-align:right';
+  const TDL = TD + ';text-align:left';
 
-  // Format expiry date to match image (M/D/YYYY)
-  const fmtDate = s => {
-    if(!s) return '—';
-    const [y,m,d] = s.split('-');
-    return `${+m}/${+d}/${y}`;
-  };
-
-  const fmt2 = v => v != null ? v.toFixed(2) : '—';
-  const fmt1 = v => v != null ? v.toFixed(2) + '%' : '—';
-  const fmtSgn = v => {
-    if(v == null) return '—';
-    return (v >= 0 ? '+' : '') + v.toFixed(2);
-  };
+  const fmt2   = v => v != null ? v.toFixed(2) : '—';
+  const fmtVol = v => v != null ? v.toFixed(2) + '%' : '—';
+  const fmtSgn = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2);
+  const negClr = v => v == null ? '#222' : v < 0 ? '#c00000' : v > 0 ? '#1a6e2e' : '#222';
 
   rows.forEach((r, i) => {
-    const bg    = i % 2 === 0 ? '#ffffff' : '#f0f4fb';
-    const chgColor = r.change != null && r.change < 0 ? '#c00000' : r.change > 0 ? '#1a6e2e' : '#222';
-    const volColor = r.chg_vol != null && r.chg_vol < 0 ? '#c00000' : r.chg_vol > 0 ? '#1a6e2e' : '#222';
-
+    const bg = i % 2 === 0 ? '#ffffff' : '#f0f4fb';
     tbody.innerHTML += `<tr style="background:${bg}">
-      <td style="${TD_L};font-weight:700;color:#1a3a6e">${r.label || r.ticker}</td>
-      <td style="${TD_R}">${r.strike != null ? r.strike.toFixed(0) : '—'}</td>
-      <td style="${TD_R};font-weight:600">${fmt2(r.value)}</td>
-      <td style="${TD_R}">${fmt1(r.atm_vol)}</td>
-      <td style="${TD_R};color:${volColor}">${fmtSgn(r.chg_vol)}</td>
-      <td style="${TD_R}">${fmt2(r.prev)}</td>
-      <td style="${TD_R};color:${chgColor}">${fmtSgn(r.change)}</td>
-      <td style="${TD_R}">${r.dte}</td>
-      <td style="${TD_R};color:#444">${fmtDate(r.expiry)}</td>
-      <td style="${TD_R}">${fmt2(r.breakeven)}</td>
+      <td style="${TDL};font-weight:700;color:#1a3a6e">${r.label || r.ticker}</td>
+      <td style="${TDR}">${r.strike != null ? r.strike.toFixed(0) : '—'}</td>
+      <td style="${TDR};font-weight:600">${fmt2(r.value)}</td>
+      <td style="${TDR}">${fmtVol(r.atm_vol)}</td>
+      <td style="${TDR};color:${negClr(r.chg_vol)}">${fmtSgn(r.chg_vol)}</td>
+      <td style="${TDR}">${fmt2(r.prev)}</td>
+      <td style="${TDR};color:${negClr(r.change)}">${fmtSgn(r.change)}</td>
+      <td style="${TDR}">${r.dte}</td>
+      <td style="${TDR};color:#444">${_fmtStradDate(r.expiry)}</td>
+      <td style="${TDR}">${fmt2(r.breakeven)}</td>
     </tr>`;
   });
+}
+
+async function refreshStraddles(){
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = '↻ Loading…';
+  try {
+    const resp = await fetch('/api/data?commodity=CT');
+    D = await resp.json();
+    renderStraddles();
+  } catch(e) {
+    console.error('refresh failed', e);
+  } finally {
+    btn.disabled = false; btn.textContent = '↻ Refresh';
+  }
 }
 </script>
 </body>

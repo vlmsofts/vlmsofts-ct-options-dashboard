@@ -1108,9 +1108,12 @@ def load_data(commodity='CT'):
         for tkr in expiry_list:
             hv_data.setdefault(tkr, {}).update(csv_hv)
 
-    # ── Straddle run ──────────────────────────────────────────────────────────
+    # ── Straddle run (Jul–Dec 2026 only) ─────────────────────────────────────
     straddles = []
     for ticker in expiry_list:
+        my = _contract_code_to_month_year(ticker, 'CT')
+        if not my or my[1] != 2026:   # 2026 delivery only
+            continue
         fwd    = futures.get(ticker)
         atm    = atm_strike.get(ticker)
         lt     = last_trade.get(ticker)
