@@ -1102,6 +1102,12 @@ def load_data(commodity='CT'):
             if vol and vol > 0:
                 atm_iv[tkr] = round(vol * 100 if vol < 1 else vol, 2)
 
+    # ── HV from local futures history (replaces Bloomberg RTD HV) ────────────
+    csv_hv = _compute_hv(LOCAL_FUT_HISTORY, 'CT')
+    if csv_hv:
+        for tkr in expiry_list:
+            hv_data.setdefault(tkr, {}).update(csv_hv)
+
     # ── Serialize options for client ──────────────────────────────────────────
     def filter_date(date_str):
         return [r for r in ct_opts if r['date'] == date_str]
@@ -1579,6 +1585,74 @@ def _schedule_settle_fetch():
         _settle_timer.daemon = True
         _settle_timer.start()
         log.info('Next settle fetch in %.0f s (at %s)', delay, target.strftime('%H:%M'))
+
+
+def _compute_hv(fut_path, commodity, windows=(10, 30, 60, 90)):
+    """
+    Historical volatility from local futures CSV, using the ordinal-1 (front-month)
+    settle series. Roll returns (days where the contract suffix changes) are excluded.
+    Returns {'hv10': ..., 'hv30': ..., 'hv60': ..., 'hv90': ...} as decimals (0.15 = 15%).
+    Returns {} when data is insufficient or the file is missing.
+    """
+    if not os.path.exists(fut_path):
+        return {}
+    prefix = commodity.upper()
+    plen   = len(prefix)
+
+    rows_by_date = {}
+    try:
+        with open(fut_path, 'r', newline='', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                if (row.get('commodity') or '').strip().upper() != commodity:
+                    continue
+                contract = (row.get('contract') or '').strip()
+                settle_s = (row.get('settle') or '').strip()
+                date_s   = (row.get('date') or '').strip()
+                if not contract or not settle_s or not date_s:
+                    continue
+                if len(contract) < plen + 4:
+                    continue
+                suffix_3 = contract[plen:plen + 3].upper()
+                if contract[plen + 3:] != '1':
+                    continue
+                try:
+                    settle = float(settle_s)
+                    if settle <= 0:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                if date_s not in rows_by_date:
+                    rows_by_date[date_s] = (suffix_3, settle)
+    except Exception:
+        return {}
+
+    if not rows_by_date:
+        return {}
+
+    log_returns = []
+    prev_settle = None
+    prev_suffix = None
+    for d in sorted(rows_by_date):
+        suffix, settle = rows_by_date[d]
+        if prev_settle is not None and prev_suffix == suffix:
+            try:
+                log_returns.append(math.log(settle / prev_settle))
+            except (ValueError, ZeroDivisionError):
+                pass
+        prev_settle = settle
+        prev_suffix = suffix
+
+    result = {}
+    for w in windows:
+        if len(log_returns) >= w:
+            sample = log_returns[-w:]
+            n      = len(sample)
+            mean   = sum(sample) / n
+            var    = sum((x - mean) ** 2 for x in sample) / max(n - 1, 1)
+            result[f'hv{w}'] = math.sqrt(var) * math.sqrt(252)
+        else:
+            result[f'hv{w}'] = None
+    return result
 
 
 def _load_generic_data(commodity):
@@ -2113,6 +2187,12 @@ def _load_generic_data(commodity):
                         iv_w = atm_iv_for_date(ticker, week_date, week_futures.get(ticker))
                         if iv_w is not None:
                             atm_iv_1w_chg[ticker] = round(live_iv * 100 - iv_w * 100, 2)
+
+    # ── HV from local futures history ─────────────────────────────────────────
+    csv_hv = _compute_hv(cfg['fut_csv'], commodity)
+    if csv_hv:
+        for tkr in expiry_list:
+            hv_data.setdefault(tkr, {}).update(csv_hv)
 
     _persist_today_generic(commodity)
 
