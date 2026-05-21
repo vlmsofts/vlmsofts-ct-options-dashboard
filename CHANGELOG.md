@@ -2,6 +2,37 @@
 
 ---
 
+## ICE RTD PIPELINE + BLOOMBERG HISTORICAL NORMALISATION (2026-05-21)
+
+### [✅] ICE RTD reader for CT (parallel pipeline, existing CT unchanged)
+
+**Files:** `ice_rtd_reader.py` (new), `test_ice_pipeline.py` (new), `normalize_bbg_softs.py` (new)
+
+**Architecture:**
+- `ice_rtd_reader.py` — standalone xlwings reader for `ICE RTD FEED CT.xlsx` (and KC/SB/CC when ready).
+  Returns `{'mode': 'live'|'today_settle'|'prior_settle'|'unavailable', 'futures': {...}, 'options': {...}}`.
+  Three-mode detection: `live` (Market State == 'Open'), `today_settle` (new ICE settle differs from stored),
+  `prior_settle` (market closed, using yesterday's data).
+- `test_ice_pipeline.py` — 8-section cross-check: workbook open, sheet discovery, futures parsing,
+  mode detection, per-strip option chains, ATM IV term structure, Bloomberg CSV comparison, OI sanity.
+  Bloomberg comparison confirmed **0.0 bps difference** on CTN6/CTU6 ATM strikes vs local CSV.
+- `normalize_bbg_softs.py` — one-time conversion of Bloomberg softs options/futures CSVs to the
+  column format app.py expects. Input: `coffee/sugar/cocoa_*_history.csv` from Downloads.
+  Output: `local_kc/sb/cc_*_history.csv` in this folder.
+
+**Normalisation detail:**
+- Options: `KCN6C 257.5 Comdty` → `security_des='KCN6C'`, `strike_px=257.5`, `px_settle=PX_LAST`.
+  PX_LAST is last-traded price (not official settle); close proxy for liquid near-ATM strikes.
+- Futures: `KCH6 Comdty` → ordinal contract `KCMAR3` where ordinal matches `get_hist_fwd`'s
+  formula exactly (`ordinal = delivery_year - first_year_from_row_date + 1`). Year derived from
+  `last_trade` (always populated by Bloomberg pull — fallback ordinal parse never triggers).
+
+**Result:** KC/SB/CC skew history extended from 2026-05-01 back to **2024-01-02** (585/600/463 dates).
+
+**ICE RTD NOT yet wired into app.py** — tested in isolation only. Existing CT pipeline untouched.
+
+---
+
 ## MULTI-COMMODITY EXPANSION — KC / SB / CC (2026-05-20)
 
 ### [✅] KC Coffee, SB Sugar, CC Cocoa added alongside CT
