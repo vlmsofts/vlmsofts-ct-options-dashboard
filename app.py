@@ -1622,6 +1622,13 @@ def _load_generic_data(commodity):
 
     comm_fut = [r for r in oi_rows if r.get('commodity', '').strip().upper() == commodity]
 
+    rtd = None
+    if _ice_rtd_reader:
+        try:
+            rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook(commodity))
+        except Exception as e:
+            log.debug('ICE RTD fetch skipped for %s: %s', commodity, e)
+
     if not comm_opts:
         return {'error': f'No {commodity} options data found'}
 
@@ -1995,6 +2002,118 @@ def _load_generic_data(commodity):
     def filter_date(date_str):
         return [r for r in comm_opts if r['date'] == date_str]
 
+    # ── RTD live data overlay ─────────────────────────────────────────────────
+    hv_data      = {}
+    live_futures = {}
+    rtd_spreads  = {}
+    data_source  = 'csv_only'
+
+    if rtd:
+        data_source = rtd.get('source', 'csv_only')
+        for tkr, d in (rtd.get('outrights') or {}).items():
+            hv_data[tkr]      = {k: d.get(k) for k in ('hv10', 'hv30', 'hv60', 'hv90')}
+            live_futures[tkr] = {k: d.get(k) for k in
+                                 ('last', 'settle', 'change', 'pct_chg',
+                                  'oi', 'oi_chg', 'volume', 'high', 'low')}
+        rtd_spreads = {tkr: {k: d.get(k) for k in ('settle', 'change', 'legs')}
+                       for tkr, d in (rtd.get('spreads') or {}).items()}
+
+    # ── Live smile from ICE RTD option bid/ask ────────────────────────────────
+    live_smile     = {}
+    live_smile_fwd = {}
+    if rtd:
+        live_opts_map = rtd.get('live_options') or {}
+        for ticker in expiry_list:
+            lo = live_opts_map.get(ticker)
+            if not lo or not lo.get('strikes'):
+                continue
+            dte = get_dte(ticker, last_date)
+            if dte <= 0:
+                continue
+            T = dte / 365.0
+
+            by_k = {}
+            for s in lo['strikes']:
+                bid, ask = s.get('bid'), s.get('ask')
+                if bid and ask and bid > 0 and ask > 0:
+                    px = (bid + ask) / 2.0
+                elif s.get('mid') and s['mid'] > 0:
+                    px = s['mid']
+                else:
+                    px = s.get('last')
+                if px and px > 0:
+                    by_k.setdefault(s['strike'], {})[s['pc']] = px
+
+            impl_Fs = sorted([
+                k + (pcs['Call'] - pcs['Put']) * math.exp(RISK_FREE * T)
+                for k, pcs in by_k.items() if 'Call' in pcs and 'Put' in pcs
+            ])
+            live_F = impl_Fs[len(impl_Fs) // 2] if len(impl_Fs) >= 3 else futures.get(ticker)
+            if not live_F:
+                continue
+
+            live_smile_fwd[ticker] = round(live_F, 4)
+            avail    = sorted(by_k.keys())
+            live_atm = min(avail, key=lambda k: abs(k - live_F)) if avail else atm_strike.get(ticker)
+            if not live_atm:
+                continue
+
+            settle_atm_iv = (atm_iv.get(ticker) or 20) / 100.0
+            iv_lo = settle_atm_iv * 0.50
+            iv_hi = settle_atm_iv * 2.50
+            smile_ivs = {}
+            for s in lo['strikes']:
+                K   = s['strike']
+                bid = s.get('bid')
+                ask = s.get('ask')
+                if not bid or not ask or bid < 0.005 or ask < 0.005 or ask > bid * 8:
+                    continue
+                px = (bid + ask) / 2.0
+                if px < 0.005:
+                    continue
+                if K < live_atm and s['pc'] != 'Put':
+                    continue
+                if K > live_atm and s['pc'] != 'Call':
+                    continue
+                iv = implied_vol(px, live_F, K, T, RISK_FREE, s['pc'] == 'Call')
+                if not iv:
+                    continue
+                d = abs(b76_delta(live_F, K, T, RISK_FREE, iv, s['pc'] == 'Call'))
+                if d < 0.03:
+                    continue
+                if d > 0.15:
+                    if not (settle_atm_iv * 0.75 < iv < settle_atm_iv * 1.30):
+                        continue
+                else:
+                    if not (iv_lo < iv < iv_hi):
+                        continue
+                smile_ivs.setdefault(K, []).append(iv)
+
+            if len(smile_ivs) >= 5:
+                smile = {round(k, 2): round(sum(ivs) / len(ivs) * 100, 2)
+                         for k, ivs in smile_ivs.items()}
+                if smile:
+                    live_smile[ticker] = smile
+
+            # ATM IV from live straddle mid
+            atm_pxs      = by_k.get(live_atm, {})
+            call_mid_atm = atm_pxs.get('Call')
+            put_mid_atm  = atm_pxs.get('Put')
+            if call_mid_atm and put_mid_atm and call_mid_atm > 0 and put_mid_atm > 0:
+                strad_mid = call_mid_atm + put_mid_atm
+                df_atm    = math.exp(-RISK_FREE * T)
+                call_eq   = (strad_mid + (live_F - live_atm) * df_atm) / 2
+                if call_eq > 0:
+                    live_iv = implied_vol(call_eq, live_F, live_atm, T, RISK_FREE, True)
+                    if live_iv and 0.01 < live_iv < 2.00:
+                        atm_iv[ticker] = round(live_iv * 100, 2)
+                        iv_p = atm_iv_for_date(ticker, prev_date, prev_futures.get(ticker))
+                        if iv_p is not None:
+                            atm_iv_1d_chg[ticker] = round(live_iv * 100 - iv_p * 100, 2)
+                        iv_w = atm_iv_for_date(ticker, week_date, week_futures.get(ticker))
+                        if iv_w is not None:
+                            atm_iv_1w_chg[ticker] = round(live_iv * 100 - iv_w * 100, 2)
+
     _persist_today_generic(commodity)
 
     return {
@@ -2021,12 +2140,12 @@ def _load_generic_data(commodity):
         'options_today':  filter_date(last_date),
         'options_prev':   filter_date(prev_date),
         'options_week':   filter_date(week_date),
-        'hv_data':        {},
-        'live_futures':   {},
-        'rtd_spreads':    {},
-        'data_source':    'csv_only',
-        'live_smile':     {},
-        'live_smile_fwd': {},
+        'hv_data':        hv_data,
+        'live_futures':   live_futures,
+        'rtd_spreads':    rtd_spreads,
+        'data_source':    data_source,
+        'live_smile':     live_smile,
+        'live_smile_fwd': live_smile_fwd,
         'commodity':      commodity,
         'commodity_name': cfg['name'],
     }
