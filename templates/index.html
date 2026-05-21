@@ -391,6 +391,7 @@ tr:hover td{background:var(--surf2)}
   <div class="tab" onclick="switchTab('trade')">Trade Analyzer</div>
   <div class="tab" onclick="switchTab('surface')">Vol Surface</div>
   <div class="tab" onclick="switchTab('skew')">Skew History</div>
+  <div class="tab" onclick="switchTab('straddles')">Straddles</div>
 </div>
 
 <!-- ══════════════════════════ PANEL: VOL SMILE ══════════════════════════ -->
@@ -699,6 +700,39 @@ tr:hover td{background:var(--surf2)}
 
 <!-- Hidden export stage -->
 <div id="export-stage"></div>
+
+<!-- ══════════════════════════ PANEL: STRADDLES ══════════════════════════ -->
+<div id="panel-straddles" class="panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+    <span id="strad-source" style="color:var(--dim);font-size:11px"></span>
+    <span style="color:var(--dim);font-size:10px">Breakeven = Value ÷ (Strike × √DTE) × 100</span>
+  </div>
+  <div style="overflow-x:auto">
+    <table id="strad-table" style="width:100%;border-collapse:collapse;font-size:13px;min-width:760px">
+      <thead>
+        <tr>
+          <td colspan="10" style="background:#1a3a6e;color:#fff;font-weight:700;font-size:14px;
+              text-align:center;padding:9px 12px;letter-spacing:0.04em">
+            Cotton Straddles
+          </td>
+        </tr>
+        <tr id="strad-hdr-row" style="background:#2b63b8;color:#fff">
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:left;border-right:1px solid rgba(255,255,255,.15)">Contract</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">Strike</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">Value</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">ATM Vol</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">% CHG on Day</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">Settlement</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">Change</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">DTE</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right;border-right:1px solid rgba(255,255,255,.15)">Expiration</th>
+          <th style="padding:6px 10px;font-weight:600;font-size:11px;text-align:right">Breakeven</th>
+        </tr>
+      </thead>
+      <tbody id="strad-tbody"></tbody>
+    </table>
+  </div>
+</div>
 
 <!-- ══════════════════════════ JAVASCRIPT ══════════════════════════ -->
 <script>
@@ -1087,6 +1121,7 @@ function switchTab(name){
   }
   if(name==='smile') setTimeout(()=>renderSmile(),50);
   if(name==='skew') loadSkewHistory();
+  if(name==='straddles') renderStraddles();
 }
 
 // ── Vol Smile ─────────────────────────────────────────────────────────────────
@@ -3400,6 +3435,60 @@ if (_savedCommod && _savedCommod !== 'CT' && ['CT','KC','SB','CC'].includes(_sav
   loadAndRender(_savedCommod);
 } else {
   init();
+}
+
+// ── Straddles ─────────────────────────────────────────────────────────────────
+function renderStraddles(){
+  const tbody = document.getElementById('strad-tbody');
+  const srcEl = document.getElementById('strad-source');
+  if(!tbody) return;
+  tbody.innerHTML = '';
+
+  const rows = D.straddles;
+  if(!rows || !rows.length){
+    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--dim);padding:14px;text-align:center">
+      No straddle data available (CT only)</td></tr>`;
+    return;
+  }
+
+  srcEl.textContent = D.data_source ? `Source: ${D.data_source}  ·  As of ${D.last_date}` : '';
+
+  const TD_BASE = 'padding:6px 10px;border-bottom:1px solid #dde3ed;font-variant-numeric:tabular-nums';
+  const TD_R    = TD_BASE + ';text-align:right';
+  const TD_L    = TD_BASE + ';text-align:left';
+
+  // Format expiry date to match image (M/D/YYYY)
+  const fmtDate = s => {
+    if(!s) return '—';
+    const [y,m,d] = s.split('-');
+    return `${+m}/${+d}/${y}`;
+  };
+
+  const fmt2 = v => v != null ? v.toFixed(2) : '—';
+  const fmt1 = v => v != null ? v.toFixed(2) + '%' : '—';
+  const fmtSgn = v => {
+    if(v == null) return '—';
+    return (v >= 0 ? '+' : '') + v.toFixed(2);
+  };
+
+  rows.forEach((r, i) => {
+    const bg    = i % 2 === 0 ? '#ffffff' : '#f0f4fb';
+    const chgColor = r.change != null && r.change < 0 ? '#c00000' : r.change > 0 ? '#1a6e2e' : '#222';
+    const volColor = r.chg_vol != null && r.chg_vol < 0 ? '#c00000' : r.chg_vol > 0 ? '#1a6e2e' : '#222';
+
+    tbody.innerHTML += `<tr style="background:${bg}">
+      <td style="${TD_L};font-weight:700;color:#1a3a6e">${r.label || r.ticker}</td>
+      <td style="${TD_R}">${r.strike != null ? r.strike.toFixed(0) : '—'}</td>
+      <td style="${TD_R};font-weight:600">${fmt2(r.value)}</td>
+      <td style="${TD_R}">${fmt1(r.atm_vol)}</td>
+      <td style="${TD_R};color:${volColor}">${fmtSgn(r.chg_vol)}</td>
+      <td style="${TD_R}">${fmt2(r.prev)}</td>
+      <td style="${TD_R};color:${chgColor}">${fmtSgn(r.change)}</td>
+      <td style="${TD_R}">${r.dte}</td>
+      <td style="${TD_R};color:#444">${fmtDate(r.expiry)}</td>
+      <td style="${TD_R}">${fmt2(r.breakeven)}</td>
+    </tr>`;
+  });
 }
 </script>
 </body>

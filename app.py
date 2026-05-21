@@ -1108,6 +1108,58 @@ def load_data(commodity='CT'):
         for tkr in expiry_list:
             hv_data.setdefault(tkr, {}).update(csv_hv)
 
+    # ── Straddle run ──────────────────────────────────────────────────────────
+    straddles = []
+    for ticker in expiry_list:
+        fwd    = futures.get(ticker)
+        atm    = atm_strike.get(ticker)
+        lt     = last_trade.get(ticker)
+        label  = expiry_labels.get(ticker)
+        iv_pct = atm_iv.get(ticker)
+        if not all([fwd, atm, lt, iv_pct]):
+            continue
+        try:
+            dte = max(0, (datetime.strptime(lt, '%Y-%m-%d') -
+                          datetime.strptime(last_date, '%Y-%m-%d')).days)
+        except ValueError:
+            continue
+        if dte <= 0:
+            continue
+        T     = dte / 365.0
+        sigma = iv_pct / 100.0
+        val   = round(b76_price(fwd, atm, T, RISK_FREE, sigma, True) +
+                      b76_price(fwd, atm, T, RISK_FREE, sigma, False), 2)
+
+        prev_c = prev_p = None
+        for r in ct_opts:
+            if r['date'] == prev_date and r['ticker'] == ticker and abs(r['strike'] - atm) < 0.01:
+                if r['pc'] == 'Call' and r['px'] > 0:
+                    prev_c = r['px']
+                elif r['pc'] == 'Put' and r['px'] > 0:
+                    prev_p = r['px']
+        prev_val = round(prev_c + prev_p, 2) if (prev_c and prev_p) else None
+        chg      = round(val - prev_val, 2) if prev_val is not None else None
+
+        try:
+            breakeven = round(val / (atm * math.sqrt(dte)) * 100, 2)
+        except (ValueError, ZeroDivisionError):
+            breakeven = None
+
+        straddles.append({
+            'ticker':    ticker,
+            'label':     label,
+            'forward':   round(fwd, 2),
+            'strike':    atm,
+            'value':     val,
+            'atm_vol':   iv_pct,
+            'chg_vol':   atm_iv_1d_chg.get(ticker),
+            'prev':      prev_val,
+            'change':    chg,
+            'dte':       dte,
+            'expiry':    lt,
+            'breakeven': breakeven,
+        })
+
     # ── Serialize options for client ──────────────────────────────────────────
     def filter_date(date_str):
         return [r for r in ct_opts if r['date'] == date_str]
@@ -1144,6 +1196,7 @@ def load_data(commodity='CT'):
         'data_source':    data_source,
         'live_smile':     live_smile,
         'live_smile_fwd': live_smile_fwd,
+        'straddles':      straddles,
         'commodity':      'CT',
         'commodity_name': 'ICE Cotton No. 2',
     }
