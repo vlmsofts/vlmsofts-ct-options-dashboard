@@ -52,18 +52,26 @@ def bootstrap():
             return
 
     # ── Options ───────────────────────────────────────────────────────────────
+    # Pin to the 8-column schema that app.py uses for generic commodities.
+    # The source options_oi.csv may have extra columns (Greeks, IV, etc.) that
+    # app.py doesn't consume — taking all source columns would produce a header
+    # mismatch when app.py later appends 8-column rows to these files.
+    OPT_KEEP = ['date', 'commodity', 'security_des', 'strike_px',
+                'px_settle', 'open_int', 'oi_chg', 'px_volume']
+
     print('Reading options_oi.csv ...')
     with open(SRC_OPT, newline='', encoding='utf-8') as f:
         opt_rows = list(csv.DictReader(f))
-    opt_fields = list(opt_rows[0].keys()) if opt_rows else []
 
     for comm, paths in TARGETS.items():
         rows = [r for r in opt_rows
                 if r.get('commodity', '').strip().upper() == comm]
         rows.sort(key=lambda r: (r.get('date', ''), r.get('security_des', '')))
+        # Project down to only the columns app.py expects
+        rows = [{k: r.get(k, '') for k in OPT_KEEP} for r in rows]
         print(f'  {comm} options: {len(rows):,} rows '
               f'({rows[0]["date"] if rows else "?"} to {rows[-1]["date"] if rows else "?"})')
-        write_csv(paths['opt'], rows, opt_fields)
+        write_csv(paths['opt'], rows, OPT_KEEP)
 
     # ── Futures ───────────────────────────────────────────────────────────────
     print('Reading oi_data.csv ...')

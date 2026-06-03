@@ -41,6 +41,12 @@ a{color:var(--acc)}
   border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.03em;
 }
 .btn-export:hover{opacity:.85}
+.btn-push{
+  background:#2a6dd9;color:#fff;border:none;padding:5px 12px;
+  border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.03em;
+}
+.btn-push:hover:not(:disabled){opacity:.85}
+.btn-push:disabled{opacity:.5;cursor:not-allowed}
 .btn-exp-panel{
   background:var(--surf2);border:1px solid var(--bord2);color:var(--acc);
   padding:4px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;
@@ -117,6 +123,8 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;padding:5px 8px;color:var(--muted);font-size:10px;text-transform:uppercase;
    letter-spacing:.05em;border-bottom:1px solid var(--bord);white-space:nowrap}
 td{padding:5px 8px;border-bottom:1px solid var(--bord);vertical-align:middle}
+#strad-table thead th{color:#fff;border-bottom:none}
+#strad-table tbody tr:hover td{background:rgba(43,99,184,0.08)}
 tr:hover td{background:var(--surf2)}
 .num{text-align:right;font-variant-numeric:tabular-nums}
 .pos{color:var(--grn)} .neg{color:var(--red)}
@@ -333,7 +341,37 @@ tr:hover td{background:var(--surf2)}
     <span id="src-badge" class="src-badge src-csv">CSV</span>
     <span id="data-date"></span>
     <button class="btn-export" onclick="openExport()">&#x1F4F7; EXPORT</button>
+    <button id="btn-push" class="btn-push" onclick="pushToSite()">&#8679; PUSH TO SITE</button>
   </div>
+</div>
+
+<!-- ── Futures Settlement Banner ── -->
+<div id="settle-banner-fut" style="display:none;background:#1a3a6e;color:#fff;
+     padding:8px 16px;font-size:12px;font-weight:600;letter-spacing:.3px;
+     align-items:center;gap:12px;border-bottom:2px solid #E8C547">
+  <span style="color:#E8C547;font-size:14px">⚡</span>
+  <span id="settle-banner-fut-text">Futures settled</span>
+  <button onclick="dismissBanner('fut')" style="margin-left:auto;background:none;
+          border:none;color:rgba(255,255,255,.7);font-size:18px;cursor:pointer;
+          line-height:1;padding:0 4px">&#x2715;</button>
+</div>
+<!-- ── Options Settlement Banner ── -->
+<div id="settle-banner-opt" style="display:none;background:#0f2744;color:#fff;
+     padding:8px 16px;font-size:12px;font-weight:600;letter-spacing:.3px;
+     align-items:center;gap:12px;border-bottom:2px solid #E8C547">
+  <span style="color:#E8C547;font-size:14px">⚡</span>
+  <span id="settle-banner-opt-text">Options settled</span>
+  <button onclick="dismissBanner('opt')" style="margin-left:auto;background:none;
+          border:none;color:rgba(255,255,255,.7);font-size:18px;cursor:pointer;
+          line-height:1;padding:0 4px">&#x2715;</button>
+</div>
+
+<!-- ── Watcher-Down Warning Banner ── -->
+<div id="watcher-down-banner" style="display:none;background:#7b1c1c;color:#fff;
+     padding:8px 16px;font-size:12px;font-weight:600;letter-spacing:.3px;
+     align-items:center;gap:12px;border-bottom:2px solid #e74c3c">
+  <span style="color:#e74c3c;font-size:14px">&#9888;</span>
+  <span>settle_watcher.py is NOT running — settlements will not be captured. Restart it now via Task Scheduler or manually.</span>
 </div>
 
 <!-- ── Live Futures Bar (RTD only) ── -->
@@ -706,8 +744,9 @@ tr:hover td{background:var(--surf2)}
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
     <span id="strad-source" style="color:var(--dim);font-size:11px"></span>
     <div style="display:flex;gap:8px;align-items:center">
-      <span style="color:var(--dim);font-size:10px">Breakeven = Value ÷ (Strike × √DTE) × 100</span>
+      <span style="color:var(--dim);font-size:10px">Breakeven = Strike × Vol / √252</span>
       <button class="btn-export" onclick="refreshStraddles()" style="font-size:11px;padding:4px 10px">↻ Refresh</button>
+      <button class="btn-export" id="btn-eod-email" onclick="openEodEmail()" style="font-size:11px;padding:4px 10px">✉ EOD Email</button>
     </div>
   </div>
   <div style="overflow-x:auto">
@@ -716,7 +755,7 @@ tr:hover td{background:var(--surf2)}
         <tr>
           <td colspan="10" id="strad-title-cell" style="background:#1a3a6e;color:#fff;font-weight:700;font-size:14px;
               text-align:center;padding:9px 12px;letter-spacing:0.04em">
-            Cotton Straddles
+            Straddles
           </td>
         </tr>
         <tr style="background:#2b63b8;color:#fff">
@@ -734,6 +773,32 @@ tr:hover td{background:var(--surf2)}
       </thead>
       <tbody id="strad-tbody"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════ EOD EMAIL MODAL ══════════════════════════ -->
+<div id="eod-modal" onclick="if(event.target===this)closeEodModal()"
+  style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:300;overflow-y:auto;padding:28px 12px">
+  <div id="eod-box"
+    style="background:#fff;color:#111;border-radius:8px;width:960px;max-width:97vw;margin:auto;
+           padding:24px 28px;position:relative;font-family:'Aptos','Segoe UI',sans-serif;font-size:13px">
+    <button onclick="closeEodModal()"
+      style="position:absolute;top:12px;right:14px;background:none;border:none;
+             font-size:22px;cursor:pointer;color:#666;line-height:1">&#x2715;</button>
+    <div id="eod-content" style="min-height:200px">
+      <div style="text-align:center;padding:40px;color:#888">Loading&#8230;</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;
+                border-top:1px solid #dde3ed;padding-top:14px;flex-wrap:wrap">
+      <button id="eod-dl-btn" onclick="downloadEodPng()" disabled
+        style="background:#E8C547;color:#000;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5">⬇ Download PNG</button>
+      <button id="eod-push-btn" onclick="pushEodToSite()" disabled
+        style="background:#1a3a6e;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5">↑ Push to Site</button>
+      <button id="eod-email-btn" onclick="draftEodEmail()" disabled
+        style="background:#2c3e50;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5">✉ Draft Email</button>
+      <button onclick="closeEodModal()"
+        style="background:#555;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer">✕ Close</button>
+    </div>
   </div>
 </div>
 
@@ -850,6 +915,7 @@ const Black76 = {
 // ── App state ─────────────────────────────────────────────────────────────────
 let activeExpiry = D.expiries && D.expiries.length ? D.expiries[0] : null;
 let smileOverlays = {today:true, prev:false, week:false};
+let _pngCaptureResolve = null;  // set by pushToSite(); intercepts _finishExport
 let smileChartType = 'smile';
 let smileChart = null;
 let surfChart  = null;
@@ -893,6 +959,15 @@ function getDTE(ticker, refDate){
   const d0 = new Date(refDate||D.last_date), d1 = new Date(lt);
   return Math.max(0, Math.round((d1-d0)/(1000*60*60*24)));
 }
+function getTradingDTE(ticker, refDate){
+  // Count Mon–Fri days only (display use only — pricing still uses getDTE/365)
+  const lt = D.last_trade[ticker];
+  if(!lt) return 0;
+  const end = new Date(lt);
+  let d = new Date(refDate||D.last_date), count = 0;
+  while(d < end){ d.setDate(d.getDate()+1); const wd=d.getDay(); if(wd!==0&&wd!==6) count++; }
+  return count;
+}
 function getChainPx(ticker, strike, pc){
   const rows = D.options_today.filter(r=>r.ticker===ticker&&r.pc===pc
     &&Math.abs(r.strike-strike)<0.01);
@@ -911,8 +986,9 @@ function init(){
   const commNames = {CT:'CT Options Analytics',KC:'KC Coffee Analytics',SB:'SB Sugar Analytics',CC:'CC Cocoa Analytics'};
   document.getElementById('commod-title').textContent = commNames[comm] || comm+' Options Analytics';
 
-  // Data date
-  document.getElementById('data-date').textContent = 'Data: ' + D.last_date;
+  // Data date — always show today; options CSV may lag until settlement is written
+  const _todayFmt = (() => { const t=new Date(); const mn=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${t.getDate()} ${mn[t.getMonth()+1]} ${t.getFullYear()}`; })();
+  document.getElementById('data-date').textContent = _todayFmt;
 
   // Source badge
   const badge = document.getElementById('src-badge');
@@ -934,6 +1010,8 @@ function init(){
 
   updateHeader();
   renderSmile();
+  // Re-render straddles if that tab is currently active
+  if(document.getElementById('panel-straddles')?.classList.contains('active')) renderStraddles();
 
   // Export expiry selector
   const expSel = document.getElementById('exp-expiry');
@@ -1054,7 +1132,7 @@ function updateHeader(){
   // This guarantees IV header and straddle price are always computed from identical source.
   let straddle = null;
   if(atmK != null && stradF > 0){
-    const stradDte = getDTE(e, D.last_date);
+    const stradDte = getDTE(e, D.today_str);
     const stradT   = stradDte / 365;
     const stradR   = getRFR();
     const stradSig = liveAtmIV != null ? liveAtmIV / 100 : null;
@@ -1125,6 +1203,7 @@ function switchTab(name){
   if(name==='smile') setTimeout(()=>renderSmile(),50);
   if(name==='skew') loadSkewHistory();
   if(name==='straddles') renderStraddles();
+  updatePushBtn();
 }
 
 // ── Vol Smile ─────────────────────────────────────────────────────────────────
@@ -1289,7 +1368,7 @@ function renderSmile(){
   }
 
   // Top-5 OTM strikes by IV change — uses OTM side only (puts ≤ ATM, calls > ATM)
-  const prev2Raw = buildSmileData(ticker,'prev');
+  const prev2Raw = buildSmileData(ticker, smileChartType==='chg' ? 'prev' : 'week');
   const itmAtm = D.atm_strike[ticker]||D.futures[ticker]||0;
   // Use live BBG mid IV when available (same source as ATM IV header), else settle
   const liveSmileMap = (D.live_smile && D.live_smile[ticker]) || null;
@@ -1315,8 +1394,9 @@ function renderSmile(){
   }).filter(r=>r.ivChg!=null).sort((a,b)=>b.score-a.score).slice(0,15);
   lastTop15 = top5rows;
 
+  const chgLbl = smileChartType==='chg' ? '1D' : '1W';
   const theadHtml = `<thead><tr>
-    <th>Strike</th><th class="num">IV</th><th class="num">Chg 1D</th>
+    <th>Strike</th><th class="num">IV</th><th class="num">Chg ${chgLbl}</th>
     <th class="num">OI Δ</th><th class="num">OI</th>
   </tr></thead>`;
   const mkRow = r => `<tr>
@@ -2120,13 +2200,25 @@ function loadSurface(){
 }
 
 // ── Export PNG ────────────────────────────────────────────────────────────────
+// Shared download helper — if pushToSite() has set _pngCaptureResolve, resolve
+// with the blob instead of triggering a download.  Existing buttons are unaffected.
+function _finishExport(cnv, filename){
+  if(_pngCaptureResolve){
+    cnv.toBlob(b=>{const r=_pngCaptureResolve;_pngCaptureResolve=null;r(b);},'image/png');
+    return;
+  }
+  const link=document.createElement('a');link.download=filename;
+  link.href=cnv.toDataURL('image/png');link.click();
+}
+
 function openExport(){
   // Route to the correct export based on which panel is active
   const activePanel = document.querySelector('.panel.active');
   if(activePanel){
-    if(activePanel.id === 'panel-trade')   { exportTradePanel();   return; }
-    if(activePanel.id === 'panel-surface') { exportSurfacePanel(); return; }
-    if(activePanel.id === 'panel-skew')    { openSkewExport();     return; }
+    if(activePanel.id === 'panel-trade')     { exportTradePanel();     return; }
+    if(activePanel.id === 'panel-surface') { exportSurfacePanel();   return; }
+    if(activePanel.id === 'panel-skew')    { openSkewExport();       return; }
+    if(activePanel.id === 'panel-straddles'){ exportStraddlePanel(); return; }
   }
   // Default: smile panel export — sync expiry and open modal
   document.getElementById('exp-client').value = document.getElementById('client-ref').value||'';
@@ -2159,7 +2251,7 @@ function _stradInfo(ticker){
 }
 
 function _drawStradStrip(cx, ticker, x, y, w){
-  const GOLD='#c9a227', WHITE='#ffffff', MUTED='#6b7280', GREEN='#22c55e';
+  const GOLD='#E8C547', WHITE='#ffffff', MUTED='#6b7280', GREEN='#22c55e';
   const B = n=>`bold ${n}px Arial,sans-serif`, N = n=>`${n}px Arial,sans-serif`;
   const sd = _stradInfo(ticker);
 
@@ -2170,26 +2262,26 @@ function _drawStradStrip(cx, ticker, x, y, w){
 
   // Left: ATM IV
   cx.textAlign = 'left';
-  cx.fillStyle = MUTED; cx.font = N(9);
+  cx.fillStyle = MUTED; cx.font = N(11);
   cx.fillText('ATM IMPLIED VOL', x+16, y+13);
   const ivStr = sd ? sd.iv.toFixed(1)+'%' : (D.atm_iv[ticker] != null ? D.atm_iv[ticker].toFixed(1)+'%' : '—');
   cx.fillStyle = (sd && sd.isLive) ? GREEN : WHITE; cx.font = B(18);
   cx.fillText(ivStr, x+16, y+34);
   const ivW = cx.measureText(ivStr).width;
-  cx.font = N(9); cx.fillStyle = (sd && sd.isLive) ? GREEN : MUTED;
+  cx.font = N(11); cx.fillStyle = (sd && sd.isLive) ? GREEN : MUTED;
   cx.fillText((sd && sd.isLive) ? '  LIVE' : '  SETTLE', x+16+ivW, y+34);
 
   // Center: contract identifier
   const expLabel = (D.expiry_labels && D.expiry_labels[ticker]) || '';
   cx.textAlign = 'center';
-  cx.fillStyle = WHITE; cx.font = B(13);
+  cx.fillStyle = WHITE; cx.font = B(14);
   cx.fillText(ticker, x+w/2, y+19);
-  if(expLabel){ cx.fillStyle = MUTED; cx.font = N(10); cx.fillText(expLabel, x+w/2, y+34); }
+  if(expLabel){ cx.fillStyle = MUTED; cx.font = N(11); cx.fillText(expLabel, x+w/2, y+34); }
 
   // Right: Straddle value
   const stradStr = sd ? sd.strad.toFixed(2)+'¢' : '—';
   cx.textAlign = 'right';
-  cx.fillStyle = MUTED; cx.font = N(9);
+  cx.fillStyle = MUTED; cx.font = N(11);
   cx.fillText('ATM STRADDLE', x+w-16, y+13);
   cx.fillStyle = GOLD; cx.font = B(18);
   cx.fillText(stradStr, x+w-16, y+34);
@@ -2204,7 +2296,7 @@ function exportTradePanel(){
   const ftPx = (lf0.last > 0 ? lf0.last : null) || D.futures[ticker];
 
   const W=840, SCALE=2, PAD=20;
-  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
+  const NAVY='#1a1a2e', GOLD='#E8C547', WHITE='#ffffff', LIGHT='#f4f6f8';
   const DARK='#111827', MUTED='#6b7280', BORDER='#d1d5db';
   const GREEN='#16a34a', RED='#dc2626';
   const B=n=>`bold ${n}px Arial,sans-serif`;
@@ -2233,16 +2325,17 @@ function exportTradePanel(){
   cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
 
   // Header
+  const _genTime1 = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'})+' ET';
   cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
   cx.fillStyle=GOLD; cx.font=B(18); cx.textAlign='left';
   cx.fillText('VLM COMMODITIES', PAD, 30);
   cx.fillStyle='#94a3b8'; cx.font=N(12);
-  cx.fillText('CT Options Analytics — Trade Analyzer', PAD, 50);
+  cx.fillText((D.commodity_name||'CT Options Analytics')+' — Trade Analyzer', PAD, 50);
   cx.textAlign='right';
   cx.fillStyle=WHITE; cx.font=B(18);
   cx.fillText(ticker+(ftPx?' — '+ftPx.toFixed(2)+'¢':''), W-PAD, 30);
   cx.fillStyle='#94a3b8'; cx.font=N(11);
-  cx.fillText('As of: '+dateStr, W-PAD, 50);
+  cx.fillText('As of: '+dateStr+'  ·  '+_genTime1, W-PAD, 50);
   cx.textAlign='left';
 
   _drawStradStrip(cx, ticker, 0, hdrH, W);
@@ -2352,7 +2445,7 @@ function exportTradePanel(){
 
   try{
     const link=document.createElement('a');
-    link.download='VLM_CT_Trade_'+ticker+'_'+dateStr+'.png';
+    link.download='VLM_'+(D.commodity||'CT')+'_Trade_'+ticker+'_'+dateStr+'.png';
     link.href=cnv.toDataURL('image/png'); link.click();
   }catch(e){ alert('Export failed: '+e.message); }
 }
@@ -2433,16 +2526,16 @@ function exportSurfacePanel(){
   }
 
   // ── Canvas setup ───────────────────────────────────────────────────────────
-  const W=840, SCALE=2, PAD=20;
-  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
-  const DARK='#111827', MUTED='#6b7280', BORDER='#d1d5db';
+  const W=1100, SCALE=2, PAD=24;
+  const NAVY='#1a1a2e', GOLD='#E8C547', WHITE='#ffffff', LIGHT='#f0f2f5';
+  const DARK='#111827', MUTED='#374151', BORDER='#9ca3af';
   const GREEN='#16a34a', RED='#dc2626';
   const B=n=>`bold ${n}px Arial,sans-serif`;
   const N=n=>`${n}px Arial,sans-serif`;
 
-  const hdrH=64, tblTitleH=32, tblHdrH=28, rowH=22, skewTitleH=32, skewH=130, footH=30;
+  const hdrH=80, tblTitleH=40, tblHdrH=36, rowH=30, skewTitleH=40, skewH=180, footH=44;
   const tblH = tblHdrH + surfRows.length*rowH;
-  const H = hdrH+_STRIP_H+8+tblTitleH+tblH+8+skewTitleH+skewH+8+footH;
+  const H = hdrH+_STRIP_H+10+tblTitleH+tblH+10+skewTitleH+skewH+10+footH;
 
   const cnv=document.createElement('canvas');
   cnv.width=W*SCALE; cnv.height=H*SCALE;
@@ -2452,27 +2545,28 @@ function exportSurfacePanel(){
   cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
 
   // ── Header ─────────────────────────────────────────────────────────────────
+  const _genTimeSurf = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'})+' ET';
   cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
-  cx.fillStyle=GOLD; cx.font=B(18); cx.textAlign='left';
-  cx.fillText('VLM COMMODITIES', PAD, 30);
-  cx.fillStyle='#94a3b8'; cx.font=N(12);
-  cx.fillText('CT Options Analytics — Vol Surface', PAD, 50);
+  cx.fillStyle=GOLD; cx.font=B(22); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES', PAD, 33);
+  cx.fillStyle='#94a3b8'; cx.font=N(14);
+  cx.fillText((D.commodity_name||'ICE Cotton No. 2')+' — Vol Surface', PAD, 58);
   cx.textAlign='right';
-  cx.fillStyle=WHITE; cx.font=B(14);
-  cx.fillText('ICE Cotton No. 2  ·  Delta-Bucket Implied Volatility', W-PAD, 30);
-  cx.fillStyle='#94a3b8'; cx.font=N(11);
-  cx.fillText('As of: '+dateStr, W-PAD, 50);
+  cx.fillStyle=WHITE; cx.font=B(18);
+  cx.fillText((D.commodity_name||'ICE Cotton No. 2')+'  ·  Delta-Bucket Implied Volatility', W-PAD, 33);
+  cx.fillStyle='#94a3b8'; cx.font=N(14);
+  cx.fillText('As of: '+dateStr+'  ·  '+_genTimeSurf, W-PAD, 58);
   cx.textAlign='left';
 
   _drawStradStrip(cx, selTicker, 0, hdrH, W);
-  let y = hdrH+_STRIP_H+8;
+  let y = hdrH+_STRIP_H+10;
 
   // ── Column geometry ────────────────────────────────────────────────────────
-  const tableW = W - PAD*2;       // 800
-  const expW   = 52;
-  const hvDivW = 10;              // visual gap between IV cols and HV cols
-  const hvW    = 40;              // per HV column
-  const ivW    = (tableW - expW - hvDivW - hvW*4) / 9;  // ~57px per IV col
+  const tableW = W - PAD*2;
+  const expW   = 70;
+  const hvDivW = 14;
+  const hvW    = 56;
+  const ivW    = (tableW - expW - hvDivW - hvW*4) / 9;
 
   function colX(ci){
     if(ci === 0) return PAD;
@@ -2486,18 +2580,16 @@ function exportSurfacePanel(){
 
   // ── Section title ──────────────────────────────────────────────────────────
   cx.fillStyle=NAVY; cx.fillRect(PAD,y,tableW,tblTitleH);
-  cx.fillStyle=GOLD; cx.font=B(11);
-  cx.fillText('>>  DELTA-BUCKET IMPLIED VOLATILITY  -  ' + (_exportHasLive ? 'LIVE' : 'SETTLE'), PAD+12, y+21);
-  // Column legend right-aligned
-  cx.fillStyle='#94a3b8'; cx.font=N(9); cx.textAlign='right';
-  cx.fillText('HV = Historical Vol (annualised %)', W-PAD-4, y+21);
+  cx.fillStyle=GOLD; cx.font=B(13);
+  cx.fillText('>>  DELTA-BUCKET IMPLIED VOLATILITY  -  ' + (_exportHasLive ? 'LIVE' : 'SETTLE'), PAD+14, y+26);
+  cx.fillStyle='#94a3b8'; cx.font=N(11); cx.textAlign='right';
+  cx.fillText('HV = Historical Vol (annualised %)', W-PAD-6, y+26);
   cx.textAlign='left';
   y+=tblTitleH;
 
   // ── Table header row ───────────────────────────────────────────────────────
   cx.fillStyle='#1e3a5f'; cx.fillRect(PAD,y,tableW,tblHdrH);
 
-  // Divider line between IV cols and HV cols
   const hvDivX = PAD + expW + 9*ivW + hvDivW/2;
   cx.strokeStyle='#2d4a6a'; cx.lineWidth=1;
   cx.beginPath(); cx.moveTo(hvDivX,y); cx.lineTo(hvDivX,y+tblHdrH); cx.stroke();
@@ -2505,9 +2597,9 @@ function exportSurfacePanel(){
   const hdrLabels = ['EXPIRY','10D P','15D P','25D P','35D P','ATM','35D C','25D C','15D C','10D C','HV10','HV30','HV60','HV90'];
   hdrLabels.forEach((lbl,ci)=>{
     cx.fillStyle = ci===5 ? GOLD : '#94a3b8';
-    cx.font = B(9); cx.textAlign = ci===0 ? 'left' : 'center';
-    const tx = ci===0 ? colX(0)+6 : colMid(ci);
-    cx.fillText(lbl, tx, y+tblHdrH-9);
+    cx.font = B(12); cx.textAlign = ci===0 ? 'left' : 'center';
+    const tx = ci===0 ? colX(0)+8 : colMid(ci);
+    cx.fillText(lbl, tx, y+tblHdrH-10);
   });
   cx.textAlign='left';
   y+=tblHdrH;
@@ -2518,106 +2610,92 @@ function exportSurfacePanel(){
   surfRows.forEach((row,ri)=>{
     cx.fillStyle = ri%2===0 ? WHITE : LIGHT;
     cx.fillRect(PAD, y, tableW, rowH);
-    cx.strokeStyle=BORDER; cx.lineWidth=0.5;
+    cx.strokeStyle=BORDER; cx.lineWidth=0.6;
     cx.beginPath(); cx.moveTo(PAD,y+rowH); cx.lineTo(W-PAD,y+rowH); cx.stroke();
 
-    // Divider
-    cx.strokeStyle='#e5e7eb';
+    cx.strokeStyle='#d1d5db';
     cx.beginPath(); cx.moveTo(hvDivX,y); cx.lineTo(hvDivX,y+rowH); cx.stroke();
 
-    // Expiry label
-    cx.fillStyle=GOLD; cx.font=B(10); cx.textAlign='left';
-    cx.fillText(row.ticker, colX(0)+6, y+rowH-6);
+    cx.fillStyle=GOLD; cx.font=B(13); cx.textAlign='left';
+    cx.fillText(row.ticker, colX(0)+8, y+rowH-8);
 
-    // IV cells
     const atmIV = row.atm_iv;
     row.cells.forEach((v,ci)=>{
       const isAtm = DELTAS[ci].target===null;
-      const isCall = DELTAS[ci].isCall===true;
-      const isPut  = DELTAS[ci].isCall===false;
       const txt = v!=null ? v.toFixed(1)+'%' : '—';
-
       let clr = DARK;
       if(isAtm) clr = GOLD;
       else if(v!=null && atmIV!=null){
-        // colour-code vs ATM: calls should be higher (skew), puts may be higher too
         const diff = v - atmIV;
-        if(Math.abs(diff) > 1.5) clr = diff>0 ? '#b45309' : '#1d4ed8'; // amber vs blue
+        if(Math.abs(diff) > 1.5) clr = diff>0 ? '#b45309' : '#1d4ed8';
       }
-
-      cx.fillStyle=clr; cx.font=isAtm?B(10):N(10); cx.textAlign='center';
-      cx.fillText(txt, colMid(ci+1), y+rowH-6);
+      cx.fillStyle=clr; cx.font=isAtm?B(12):N(12); cx.textAlign='center';
+      cx.fillText(txt, colMid(ci+1), y+rowH-8);
     });
 
-    // HV cells
     [row.hv.hv10, row.hv.hv30, row.hv.hv60, row.hv.hv90].forEach((v,hi)=>{
-      cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='center';
-      cx.fillText(fmtHV(v), colMid(10+hi), y+rowH-6);
+      cx.fillStyle=MUTED; cx.font=N(12); cx.textAlign='center';
+      cx.fillText(fmtHV(v), colMid(10+hi), y+rowH-8);
     });
 
     y+=rowH;
   });
 
   // ── 25Δ Skew bars ──────────────────────────────────────────────────────────
-  y+=8;
+  y+=10;
   cx.textAlign='left';
   cx.fillStyle=NAVY; cx.fillRect(PAD,y,tableW,skewTitleH);
-  cx.fillStyle=GOLD; cx.font=B(11);
-  cx.fillText('>>  25D SKEW BY EXPIRY  (Put IV - Call IV, vol pts)', PAD+12, y+21);
+  cx.fillStyle=GOLD; cx.font=B(13);
+  cx.fillText('>>  25D SKEW BY EXPIRY  (Put IV − Call IV, vol pts)', PAD+14, y+26);
   y+=skewTitleH;
 
   cx.fillStyle=LIGHT; cx.fillRect(PAD,y,tableW,skewH);
-  cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,y,tableW,skewH);
+  cx.strokeStyle=BORDER; cx.lineWidth=1.2; cx.strokeRect(PAD,y,tableW,skewH);
 
   const skewVals = surfRows.map(r=>r.skew).filter(v=>v!=null);
   const skewAbs  = skewVals.map(Math.abs);
   const skewMax  = Math.max(...skewAbs, 1);
-  const bPad=24, totalBarW=tableW-bPad*2;
-  const bw=Math.floor(totalBarW/surfRows.length * 0.65);
+  const bPad=28, totalBarW=tableW-bPad*2;
+  const bw=Math.floor(totalBarW/surfRows.length * 0.62);
   const bGap=Math.floor(totalBarW/surfRows.length);
-  const skewTopPad=10, skewBotPad=24;
+  const skewTopPad=14, skewBotPad=30;
   const zeroY=y+skewTopPad+(skewH-skewTopPad-skewBotPad)/2;
   const skewScale=(skewH-skewTopPad-skewBotPad)/2/skewMax;
 
-  // zero line
-  cx.strokeStyle='#d1d5db'; cx.lineWidth=1; cx.setLineDash([3,3]);
+  cx.strokeStyle='#9ca3af'; cx.lineWidth=1.2; cx.setLineDash([4,4]);
   cx.beginPath(); cx.moveTo(PAD+bPad,zeroY); cx.lineTo(W-PAD-bPad,zeroY); cx.stroke();
   cx.setLineDash([]);
 
   surfRows.forEach((row,i)=>{
     const sv=row.skew; if(sv==null) return;
     const bx=PAD+bPad+i*bGap+(bGap-bw)/2;
-    const bh=Math.max(2,Math.abs(sv)*skewScale);
+    const bh=Math.max(3,Math.abs(sv)*skewScale);
     const by=sv>=0?zeroY-bh:zeroY;
-    cx.fillStyle=sv>0?'rgba(220,38,38,0.75)':'rgba(22,163,74,0.75)';
+    cx.fillStyle=sv>0?'rgba(220,38,38,0.80)':'rgba(22,163,74,0.80)';
     cx.fillRect(bx,by,bw,bh);
 
-    // value label — clamp inside chart bounds
-    cx.fillStyle=sv>0?RED:GREEN; cx.font=B(9); cx.textAlign='center';
-    const vlYraw=sv>=0?by-4:by+bh+11;
-    const vlY=Math.min(vlYraw, y+skewH-skewBotPad+9);
+    cx.fillStyle=sv>0?RED:GREEN; cx.font=B(12); cx.textAlign='center';
+    const vlYraw=sv>=0?by-5:by+bh+14;
+    const vlY=Math.min(vlYraw, y+skewH-skewBotPad+12);
     cx.fillText((sv>=0?'+':'')+sv.toFixed(1), bx+bw/2, vlY);
 
-    // ticker label
-    cx.fillStyle=DARK; cx.font=B(9);
-    cx.fillText(row.ticker, bx+bw/2, y+skewH-6);
+    cx.fillStyle=DARK; cx.font=B(12);
+    cx.fillText(row.ticker, bx+bw/2, y+skewH-8);
   });
   cx.textAlign='left';
   y+=skewH;
 
   // ── Footer ─────────────────────────────────────────────────────────────────
-  y+=8;
-  cx.fillStyle=LIGHT; cx.fillRect(0,y,W,footH);
-  cx.strokeStyle=BORDER; cx.lineWidth=1;
+  y+=10;
+  cx.fillStyle='#e8ecf0'; cx.fillRect(0,y,W,footH);
+  cx.strokeStyle=BORDER; cx.lineWidth=0.8;
   cx.beginPath(); cx.moveTo(0,y); cx.lineTo(W,y); cx.stroke();
-  cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='left';
-  cx.fillText('VLM COMMODITIES LTD — FOR DISCUSSION PURPOSES ONLY', PAD, y+20);
-  cx.textAlign='right'; cx.fillText(dateStr, W-PAD, y+20); cx.textAlign='left';
+  cx.fillStyle=MUTED; cx.font=N(13); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES LTD — FOR DISCUSSION PURPOSES ONLY', PAD, y+28);
+  cx.textAlign='right'; cx.fillText(dateStr, W-PAD, y+28); cx.textAlign='left';
 
   try{
-    const link=document.createElement('a');
-    link.download='VLM_CT_Surface_'+dateStr+'.png';
-    link.href=cnv.toDataURL('image/png'); link.click();
+    _finishExport(cnv,'VLM_'+(D.commodity||'CT')+'_Surface_'+dateStr+'.png');
   }catch(e){ alert('Export failed: '+e.message); }
 }
 function closeExport(){ document.getElementById('export-modal').classList.remove('open'); }
@@ -2631,7 +2709,11 @@ function setExpOv(mode,el){
 function generatePng(){
   const ticker  = document.getElementById('exp-expiry').value||D.expiries[0]||'CT';
   const client  = document.getElementById('exp-client').value||'';
-  const dateStr = D.last_date||'';
+  const dateStr = new Date().toLocaleDateString('en-CA');  // today's date YYYY-MM-DD
+
+  // Reference period driven by export modal (+DOD = prev day, +WOW = week ago)
+  const pngRefPeriod   = expOv === 'wow' ? 'week' : 'prev';
+  const pngPeriodLabel = expOv === 'wow' ? '1W' : '1D';
 
   // Live futures price if available, else settle
   const lf0 = (D.live_futures && D.live_futures[ticker]) || {};
@@ -2640,7 +2722,7 @@ function generatePng(){
   // ── Build smile data — reuse the same logic as the main smile chart ──────────
   const minK = parseFloat(document.getElementById('smile-min').value) || 0;
   const maxK = parseFloat(document.getElementById('smile-max').value) || Infinity;
-  const dte  = getDTE(ticker, D.last_date);
+  const dte  = getTradingDTE(ticker, D.last_date);
 
   function smileToPoints(dateSet){
     const sd = buildSmileData(ticker, dateSet);
@@ -2650,8 +2732,8 @@ function generatePng(){
   }
 
   const settleData = smileToPoints('today');
-  const prevData   = smileOverlays.prev ? smileToPoints('prev') : [];
-  const weekData   = smileOverlays.week ? smileToPoints('week') : [];
+  const prevData   = expOv === 'dod' ? smileToPoints('prev') : [];
+  const weekData   = expOv === 'wow' ? smileToPoints('week') : [];
   const liveMap    = D.live_smile && D.live_smile[ticker] ? D.live_smile[ticker] : null;
   const liveData   = liveMap
     ? Object.entries(liveMap).map(([k,v])=>({k:Number(k),iv:v}))
@@ -2660,16 +2742,40 @@ function generatePng(){
 
   // ── Layout constants ───────────────────────────────────────────────────────
   const W=840, SCALE=2, PAD=20;
-  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
+  const NAVY='#1a1a2e', GOLD='#E8C547', WHITE='#ffffff', LIGHT='#f4f6f8';
   const DARK='#111827', MUTED='#6b7280', BORDER='#d1d5db';
   const GREEN='#16a34a', RED='#dc2626', AMBER='#d97706', BLUE='#3b82f6';
   const B = n=>`bold ${n}px Arial,sans-serif`;
   const N = n=>`${n}px Arial,sans-serif`;
 
+  // IV Change bars — reference period from export modal (DOD=prev, WOW=week)
+  const ivChgBase = buildSmileData(ticker, pngRefPeriod);
+  const ivChgBars = settleData.map(d=>{
+    const pi=ivChgBase.strikes.findIndex(s=>Math.abs(s-d.k)<0.01);
+    return pi>=0&&ivChgBase.ivs[pi]!=null?{k:d.k,chg:d.iv-ivChgBase.ivs[pi]}:null;
+  }).filter(Boolean);
+
   const hdrH=64, kpiH=84;
-  const hasChart = settleData.length > 2;
+  const hasChart = smileChartType==='chg' ? ivChgBars.length>2 : settleData.length>2;
   const chartSecH = hasChart ? 32 + 230 + 8 : 0;  // title bar + chart + gap
-  const top15 = lastTop15 || [];
+
+  // Recompute table rows fresh using pngRefPeriod (not live-chart's lastTop15)
+  const _pngRefBase = ivChgBase;  // already computed above
+  const _pngLiveMap = D.live_smile && D.live_smile[ticker] ? D.live_smile[ticker] : null;
+  const _pngAtm     = D.atm_strike[ticker] || D.futures[ticker] || 0;
+  const _pngToday   = buildSmileData(ticker, 'today');
+  const top15 = _pngToday.strikes.map((k,i)=>{
+    const isCall = k > _pngAtm;
+    const pi = _pngRefBase.strikes.findIndex(s=>Math.abs(s-k)<0.01);
+    const liveIV = _pngLiveMap ? (_pngLiveMap[k]??_pngLiveMap[Math.round(k)]??null) : null;
+    const ivNow  = liveIV!=null ? liveIV : _pngToday.ivs[i];
+    const ivPrev = pi>=0 ? _pngRefBase.ivs[pi] : null;
+    const ivChg  = ivNow!=null&&ivPrev!=null ? ivNow-ivPrev : null;
+    const pc = isCall?'Call':'Put';
+    const tOI = D.options_today.find(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01&&r.pc===pc);
+    const pOI = D.options_prev.find(r=>r.ticker===ticker&&Math.abs(r.strike-k)<0.01&&r.pc===pc);
+    return {k,ivNow,ivChg,side:pc,oiChg:tOI&&pOI?tOI.oi-pOI.oi:null,oi:tOI?tOI.oi:null,score:Math.abs(ivChg||0)};
+  }).filter(r=>r.ivChg!=null).sort((a,b)=>b.score-a.score).slice(0,15);
   const tblRowH=24, tblHdrH=30, tblTitleH=32;
   const half = Math.ceil(top15.length/2);
   const tblSecH = top15.length ? tblTitleH+tblHdrH+half*tblRowH+1 : 0;
@@ -2685,16 +2791,17 @@ function generatePng(){
   cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
 
   // ── Header ────────────────────────────────────────────────────────────────
+  const _genTimeSmile = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'})+' ET';
   cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
   cx.fillStyle=GOLD; cx.font=B(18); cx.textAlign='left';
   cx.fillText('VLM COMMODITIES', PAD, 30);
   cx.fillStyle='#94a3b8'; cx.font=N(12);
-  cx.fillText('CT Options Analytics', PAD, 50);
+  cx.fillText((D.commodity_name||'CT Options Analytics'), PAD, 50);
   cx.textAlign='right';
   cx.fillStyle=WHITE; cx.font=B(18);
   cx.fillText(ticker+(ftPx?' — '+ftPx.toFixed(2)+'¢':''), W-PAD, 30);
   cx.fillStyle='#94a3b8'; cx.font=N(11);
-  cx.fillText('As of: '+dateStr+(client?' · '+client:''), W-PAD, 50);
+  cx.fillText('As of: '+dateStr+'  ·  '+_genTimeSmile+(client?' · '+client:''), W-PAD, 50);
   cx.textAlign='left';
 
   _drawStradStrip(cx, ticker, 0, hdrH, W);
@@ -2730,94 +2837,161 @@ function generatePng(){
   cx.textAlign='left';
   y+=kpiH;
 
-  // ── Vol Smile chart (native redraw) ───────────────────────────────────────
+  // ── Vol Smile / IV Change chart (native redraw) ───────────────────────────
   if(hasChart){
     y+=8;
-    cx.fillStyle=NAVY; cx.fillRect(PAD,y,W-PAD*2,32);
-    cx.fillStyle=GOLD; cx.font=B(11);
-    cx.fillText('◆  VOL SMILE — '+ticker+'   ('+dte+' days to expiry)', PAD+12, y+21);
-    y+=32;
-
-    const LM=52, RM=12, TM=10, BM=28; // left/right/top/bottom margin within chart box
     const cW=W-PAD*2, cH=230;
-    cx.fillStyle=LIGHT; cx.fillRect(PAD,y,cW,cH);
-    cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,y,cW,cH);
+    const LM=52, RM=12, TM=10, BM=28;
 
-    const plotX=PAD+LM, plotY=y+TM, plotW=cW-LM-RM, plotH=cH-TM-BM;
+    if(smileChartType === 'chg'){
+      // ── Bar histogram — IV change today vs yesterday ──
+      cx.fillStyle=NAVY; cx.fillRect(PAD,y,cW,32);
+      cx.fillStyle=GOLD; cx.font=B(11);
+      cx.fillText('◆  IV CHANGE ('+pngPeriodLabel+') — '+ticker+'   ('+dte+' days to expiry)', PAD+12, y+21);
+      y+=32;
 
-    // IV range
-    const allIVs=[...settleData,...(liveData||[]),...prevData,...weekData].map(d=>d.iv);
-    const ivRaw0=Math.min(...allIVs), ivRaw1=Math.max(...allIVs);
-    const ivPad=(ivRaw1-ivRaw0)*0.12||1.5;
-    const ivLo=Math.floor((ivRaw0-ivPad)*2)/2, ivHi=Math.ceil((ivRaw1+ivPad)*2)/2;
+      cx.fillStyle=LIGHT; cx.fillRect(PAD,y,cW,cH);
+      cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,y,cW,cH);
 
-    // Strike range
-    const allKs=[...settleData,...(liveData||[])].map(d=>d.k);
-    const kLo=Math.min(...allKs), kHi=Math.max(...allKs);
+      const plotX=PAD+LM, plotY=y+TM, plotW=cW-LM-RM, plotH=cH-TM-BM;
 
-    const toX=k  => plotX+(k -kLo)/(kHi-kLo)*plotW;
-    const toY=iv => plotY+plotH-(iv-ivLo)/(ivHi-ivLo)*plotH;
+      const chgs=ivChgBars.map(d=>d.chg);
+      const rawMax=Math.max(...chgs.map(Math.abs),0.01);
+      const yPad=rawMax*0.2||0.05;
+      const yLo=-(rawMax+yPad), yHi=rawMax+yPad;
 
-    // Y grid + labels
-    const ivStep=(ivHi-ivLo)>12?2:1;
-    for(let iv=Math.ceil(ivLo);iv<=ivHi;iv+=ivStep){
-      const py=toY(iv); if(py<plotY-1||py>plotY+plotH+1) continue;
-      cx.strokeStyle='#e5e7eb'; cx.lineWidth=0.5; cx.setLineDash([3,3]);
-      cx.beginPath(); cx.moveTo(plotX,py); cx.lineTo(plotX+plotW,py); cx.stroke();
-      cx.setLineDash([]);
-      cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='right';
-      cx.fillText(iv.toFixed(1)+'%', plotX-5, py+4);
-    }
+      const kLo2=Math.min(...ivChgBars.map(d=>d.k));
+      const kHi2=Math.max(...ivChgBars.map(d=>d.k));
+      const toXb=k=>kHi2===kLo2?plotX+plotW/2:plotX+(k-kLo2)/(kHi2-kLo2)*plotW;
+      const toYb=v=>plotY+plotH-(v-yLo)/(yHi-yLo)*plotH;
+      const zeroY=toYb(0);
 
-    // X grid + labels
-    const kRange=kHi-kLo;
-    const kStep=kRange>40?5:kRange>20?2:1;
-    const kStart=Math.ceil(kLo/kStep)*kStep;
-    cx.textAlign='center';
-    for(let k=kStart;k<=kHi;k+=kStep){
-      const px=toX(k); if(px<plotX||px>plotX+plotW) continue;
-      cx.strokeStyle='#e5e7eb'; cx.lineWidth=0.5; cx.setLineDash([3,3]);
-      cx.beginPath(); cx.moveTo(px,plotY); cx.lineTo(px,plotY+plotH); cx.stroke();
-      cx.setLineDash([]);
-      cx.fillStyle=MUTED; cx.font=N(10);
-      cx.fillText(k, px, plotY+plotH+18);
-    }
-    cx.textAlign='left';
-
-    // Draw a smile line
-    function drawSmileLine(data, color, dash, dotR){
-      if(!data||data.length<2) return;
-      cx.beginPath(); cx.strokeStyle=color; cx.lineWidth=2.5;
-      if(dash) cx.setLineDash(dash); else cx.setLineDash([]);
-      data.forEach((d,i)=>{ const px=toX(d.k),py=toY(d.iv); i?cx.lineTo(px,py):cx.moveTo(px,py); });
-      cx.stroke(); cx.setLineDash([]);
-      if(dotR>0){
-        cx.fillStyle=color;
-        data.forEach(d=>{ cx.beginPath(); cx.arc(toX(d.k),toY(d.iv),dotR,0,Math.PI*2); cx.fill(); });
+      // Y grid + labels
+      const vStep=rawMax>0.2?0.1:rawMax>0.05?0.05:0.02;
+      for(let v=Math.ceil(yLo/vStep)*vStep; v<=yHi+0.0001; v=Math.round((v+vStep)*10000)/10000){
+        const py=toYb(v);
+        if(py<plotY-1||py>plotY+plotH+1) continue;
+        const isZero=Math.abs(v)<0.0001;
+        cx.strokeStyle=isZero?'#94a3b8':'#e5e7eb'; cx.lineWidth=isZero?1:0.5;
+        cx.setLineDash(isZero?[]:[3,3]);
+        cx.beginPath(); cx.moveTo(plotX,py); cx.lineTo(plotX+plotW,py); cx.stroke();
+        cx.setLineDash([]);
+        cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='right';
+        cx.fillText((v>0.0001?'+':'')+v.toFixed(2)+'%', plotX-5, py+4);
       }
-    }
 
-    if(weekData.length>2) drawSmileLine(weekData, RED, [5,3], 0);
-    if(prevData.length>2) drawSmileLine(prevData, BLUE, [5,3], 0);
-    drawSmileLine(settleData, '#64748b', [5,3], 0);
-    if(liveData&&liveData.length>2) drawSmileLine(liveData, GOLD, [], 3);
+      // Bars
+      const barW=Math.max(4, Math.min(16, plotW/Math.max(ivChgBars.length,1)*0.7));
+      ivChgBars.forEach(d=>{
+        const bx=toXb(d.k)-barW/2;
+        const barTop=d.chg>=0?toYb(d.chg):zeroY;
+        const barH=Math.abs(zeroY-toYb(d.chg));
+        cx.fillStyle=d.chg>=0?'rgba(34,197,94,.75)':'rgba(239,68,68,.75)';
+        cx.fillRect(bx, barTop, barW, Math.max(1,barH));
+      });
 
-    // Legend
-    const legItems=[];
-    if(liveData&&liveData.length>2) legItems.push({c:GOLD,  lbl:'Live (BBG mid)', dash:false});
-    legItems.push({c:'#64748b', lbl:'Settle', dash:true});
-    if(prevData.length>2) legItems.push({c:BLUE, lbl:'Yesterday', dash:true});
-    if(weekData.length>2) legItems.push({c:RED,  lbl:'1 Week Ago', dash:true});
-    let lx=plotX+10;
-    legItems.forEach(({c,lbl,dash})=>{
-      cx.strokeStyle=c; cx.lineWidth=2.5;
-      if(dash) cx.setLineDash([4,2]); else cx.setLineDash([]);
-      cx.beginPath(); cx.moveTo(lx,plotY+14); cx.lineTo(lx+20,plotY+14); cx.stroke();
-      cx.setLineDash([]);
+      // X labels
+      const kRange2=kHi2-kLo2;
+      const kStep2=kRange2>40?5:kRange2>20?2:1;
+      cx.textAlign='center';
+      ivChgBars.forEach(d=>{
+        if(Math.round(d.k)%kStep2!==0) return;
+        cx.fillStyle=MUTED; cx.font=N(10);
+        cx.fillText(d.k, toXb(d.k), plotY+plotH+18);
+      });
+      cx.textAlign='left';
+
+      // Legend
+      cx.fillStyle='rgba(22,163,74,.75)'; cx.fillRect(plotX+10, plotY+6, 18, 10);
       cx.fillStyle=DARK; cx.font=N(10); cx.textAlign='left';
-      cx.fillText(lbl, lx+25, plotY+18);
-      lx+=cx.measureText(lbl).width+50;
-    });
+      cx.fillText('IV Change (1D)', plotX+32, plotY+16);
+
+    } else {
+      // ── Smile line chart ──
+      cx.fillStyle=NAVY; cx.fillRect(PAD,y,cW,32);
+      cx.fillStyle=GOLD; cx.font=B(11);
+      cx.fillText('◆  VOL SMILE — '+ticker+'   ('+dte+' days to expiry)', PAD+12, y+21);
+      y+=32;
+
+      cx.fillStyle=LIGHT; cx.fillRect(PAD,y,cW,cH);
+      cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,y,cW,cH);
+
+      const plotX=PAD+LM, plotY=y+TM, plotW=cW-LM-RM, plotH=cH-TM-BM;
+
+      // IV range
+      const allIVs=[...settleData,...(liveData||[]),...prevData,...weekData].map(d=>d.iv);
+      const ivRaw0=Math.min(...allIVs), ivRaw1=Math.max(...allIVs);
+      const ivPad=(ivRaw1-ivRaw0)*0.12||1.5;
+      const ivLo=Math.floor((ivRaw0-ivPad)*2)/2, ivHi=Math.ceil((ivRaw1+ivPad)*2)/2;
+
+      // Strike range
+      const allKs=[...settleData,...(liveData||[])].map(d=>d.k);
+      const kLo=Math.min(...allKs), kHi=Math.max(...allKs);
+
+      const toX=k  => plotX+(k-kLo)/(kHi-kLo)*plotW;
+      const toY=iv => plotY+plotH-(iv-ivLo)/(ivHi-ivLo)*plotH;
+
+      // Y grid + labels
+      const ivStep=(ivHi-ivLo)>12?2:1;
+      for(let iv=Math.ceil(ivLo);iv<=ivHi;iv+=ivStep){
+        const py=toY(iv); if(py<plotY-1||py>plotY+plotH+1) continue;
+        cx.strokeStyle='#e5e7eb'; cx.lineWidth=0.5; cx.setLineDash([3,3]);
+        cx.beginPath(); cx.moveTo(plotX,py); cx.lineTo(plotX+plotW,py); cx.stroke();
+        cx.setLineDash([]);
+        cx.fillStyle=MUTED; cx.font=N(10); cx.textAlign='right';
+        cx.fillText(iv.toFixed(1)+'%', plotX-5, py+4);
+      }
+
+      // X grid + labels
+      const kRange=kHi-kLo;
+      const kStep=kRange>40?5:kRange>20?2:1;
+      const kStart=Math.ceil(kLo/kStep)*kStep;
+      cx.textAlign='center';
+      for(let k=kStart;k<=kHi;k+=kStep){
+        const px=toX(k); if(px<plotX||px>plotX+plotW) continue;
+        cx.strokeStyle='#e5e7eb'; cx.lineWidth=0.5; cx.setLineDash([3,3]);
+        cx.beginPath(); cx.moveTo(px,plotY); cx.lineTo(px,plotY+plotH); cx.stroke();
+        cx.setLineDash([]);
+        cx.fillStyle=MUTED; cx.font=N(10);
+        cx.fillText(k, px, plotY+plotH+18);
+      }
+      cx.textAlign='left';
+
+      // Draw a smile line
+      function drawSmileLine(data, color, dash, dotR){
+        if(!data||data.length<2) return;
+        cx.beginPath(); cx.strokeStyle=color; cx.lineWidth=2.5;
+        if(dash) cx.setLineDash(dash); else cx.setLineDash([]);
+        data.forEach((d,i)=>{ const px=toX(d.k),py=toY(d.iv); i?cx.lineTo(px,py):cx.moveTo(px,py); });
+        cx.stroke(); cx.setLineDash([]);
+        if(dotR>0){
+          cx.fillStyle=color;
+          data.forEach(d=>{ cx.beginPath(); cx.arc(toX(d.k),toY(d.iv),dotR,0,Math.PI*2); cx.fill(); });
+        }
+      }
+
+      if(weekData.length>2) drawSmileLine(weekData, RED, [5,3], 0);
+      if(prevData.length>2) drawSmileLine(prevData, BLUE, [5,3], 0);
+      drawSmileLine(settleData, '#64748b', [5,3], 0);
+      if(liveData&&liveData.length>2) drawSmileLine(liveData, GOLD, [], 3);
+
+      // Legend
+      const legItems=[];
+      if(liveData&&liveData.length>2) legItems.push({c:GOLD,  lbl:'Live (BBG mid)', dash:false});
+      legItems.push({c:'#64748b', lbl:'Settle', dash:true});
+      if(prevData.length>2) legItems.push({c:BLUE, lbl:'Yesterday', dash:true});
+      if(weekData.length>2) legItems.push({c:RED,  lbl:'1 Week Ago', dash:true});
+      let lx=plotX+10;
+      legItems.forEach(({c,lbl,dash})=>{
+        cx.strokeStyle=c; cx.lineWidth=2.5;
+        if(dash) cx.setLineDash([4,2]); else cx.setLineDash([]);
+        cx.beginPath(); cx.moveTo(lx,plotY+14); cx.lineTo(lx+20,plotY+14); cx.stroke();
+        cx.setLineDash([]);
+        cx.fillStyle=DARK; cx.font=N(10); cx.textAlign='left';
+        cx.fillText(lbl, lx+25, plotY+18);
+        lx+=cx.measureText(lbl).width+50;
+      });
+    }
 
     y+=cH+8;
   }
@@ -2827,12 +3001,12 @@ function generatePng(){
     y+=8;
     cx.fillStyle=NAVY; cx.fillRect(PAD,y,W-PAD*2,tblTitleH);
     cx.fillStyle=GOLD; cx.font=B(11);
-    cx.fillText('◆  TOP STRIKES BY IV CHANGE (1D)', PAD+12, y+21);
+    cx.fillText('◆  TOP STRIKES BY IV CHANGE ('+pngPeriodLabel+')', PAD+12, y+21);
     y+=tblTitleH;
 
     const colW=(W-PAD*2)/2;
     const subW=[colW*0.28,colW*0.17,colW*0.22,colW*0.17,colW*0.16];
-    const hdrLabels=['STRIKE','IV','CHG 1D','OI Δ','OI'];
+    const hdrLabels=['STRIKE','IV','CHG '+pngPeriodLabel,'OI Δ','OI'];
 
     for(let side=0;side<2;side++){
       const xBase=PAD+side*colW;
@@ -2892,10 +3066,7 @@ function generatePng(){
   cx.textAlign='left';
 
   try{
-    const link=document.createElement('a');
-    link.download='VLM_CT_'+ticker+'_'+dateStr+'.png';
-    link.href=cnv.toDataURL('image/png');
-    link.click();
+    _finishExport(cnv,'VLM_'+(D.commodity||'CT')+'_'+ticker+'_'+dateStr+'.png');
   }catch(e){ alert('Export failed: '+e.message); }
   closeExport();
 }
@@ -3213,8 +3384,9 @@ function generateSkewPngs(){
     if(!cnv) return;
     const a = document.createElement('a');
     a.href = cnv.toDataURL('image/png');
-    const slug = _skewActive.replace('CT','').toLowerCase()||'rolling';
-    a.download = `ct_skew_${slug}_${key}_${D.last_date||''}.png`;
+    const _comm = (D.commodity||'CT').toLowerCase();
+    const slug = _skewActive.replace(D.commodity||'CT','').toLowerCase()||'rolling';
+    a.download = `${_comm}_skew_${slug}_${key}_${D.last_date||''}.png`;
     a.click();
   });
 }
@@ -3229,83 +3401,90 @@ function _drawSkewPng(key, title){
   const stored = _skewChartData[key];
   if(!stored||!stored.dates.length) return null;
 
-  const NAVY='#0f1923', GOLD='#c9a227', WHITE='#ffffff', LIGHT='#f4f6f8';
-  const DARK='#1a1a1a', MUTED='#6b7280', BORDER='#d1d5db', GRID='#e5e7eb';
+  // ── Palette (high contrast for WhatsApp) ────────────────────────────────
+  const NAVY='#1a1a2e', GOLD='#E8C547', WHITE='#ffffff', LIGHT='#f0f2f5';
+  const DARK='#111827', MUTED='#374151', BORDER='#9ca3af', GRID='#cbd5e1';
   const B=n=>`bold ${n}px Arial,sans-serif`, NF=n=>`${n}px Arial,sans-serif`;
-  const SCALE=2, W=920, PAD=24, hdrH=64, footH=52;
-  const chartH=310, H=hdrH+_STRIP_H+16+chartH+24+footH;
+
+  // ── Layout ───────────────────────────────────────────────────────────────
+  const SCALE=2, W=1100, PAD=28;
+  const hdrH=80, LM=66, RM=16, TM=22, BM=68;
+  const chartH=390;                        // chart box height
+  const statsH=54, chgHt=52, footH=48;    // info rows below chart
+  const H=hdrH+_STRIP_H+20+chartH+statsH+chgHt+footH;
 
   const cnv=document.createElement('canvas');
   cnv.width=W*SCALE; cnv.height=H*SCALE;
   const cx=cnv.getContext('2d');
   cx.scale(SCALE,SCALE);
 
-  // White bg
+  // White background
   cx.fillStyle=WHITE; cx.fillRect(0,0,W,H);
 
-  // Header
+  // ── Header ───────────────────────────────────────────────────────────────
   cx.fillStyle=NAVY; cx.fillRect(0,0,W,hdrH);
-  cx.fillStyle=GOLD; cx.font=B(17); cx.textAlign='left';
-  cx.fillText('VLM COMMODITIES',PAD,27);
-  cx.fillStyle='#94a3b8'; cx.font=NF(11);
-  cx.fillText('CT Options  ·  Skew History',PAD,47);
-  cx.fillStyle=WHITE; cx.font=B(15); cx.textAlign='right';
-  cx.fillText(_skewTickerLabel()+' — '+title.replace('vs','vs'),W-PAD,27);
+  cx.fillStyle=GOLD; cx.font=B(22); cx.textAlign='left';
+  cx.fillText('VLM COMMODITIES', PAD, 33);
+  cx.fillStyle='#94a3b8'; cx.font=NF(14);
+  const _commSub = (D.commodity_name||(D.commodity||'CT')+' Options')+'  ·  Skew History';
+  cx.fillText(_commSub, PAD, 58);
+  cx.fillStyle=WHITE; cx.font=B(19); cx.textAlign='right';
+  cx.fillText(_skewTickerLabel()+' — '+title, W-PAD, 33);
   const dates=stored.dates;
-  cx.fillStyle='#94a3b8'; cx.font=NF(11);
+  const _genTimeSkew = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'})+' ET';
+  cx.fillStyle='#94a3b8'; cx.font=NF(14);
   cx.fillText((dates.length?_fmtDL(dates[0])+' → '+_fmtDL(dates[dates.length-1]):'')+
-    '  ('+dates.length+' days)',W-PAD,47);
+    '  ('+dates.length+' days)  ·  '+_genTimeSkew, W-PAD, 58);
   cx.textAlign='left';
 
-  // Straddle strip — resolve ticker from _skewActive
+  // ── ATM straddle strip ───────────────────────────────────────────────────
   const _skewStripTkr = _skewActive === 'rolling'
-    ? (D.expiries || []).find(e => D.atm_iv && D.atm_iv[e] != null) || null
+    ? (D.expiries||[]).find(e=>D.atm_iv&&D.atm_iv[e]!=null)||null
     : _skewActive;
   if(_skewStripTkr) _drawStradStrip(cx, _skewStripTkr, 0, hdrH, W);
 
-  // Chart box
-  const LM=52,RM=14,TM=16,BM=46;
-  const cy=hdrH+_STRIP_H+16, cW=W-PAD*2;
+  // ── Chart box ────────────────────────────────────────────────────────────
+  const cy=hdrH+_STRIP_H+20, cW=W-PAD*2;
   cx.fillStyle=LIGHT; cx.fillRect(PAD,cy,cW,chartH);
-  cx.strokeStyle=BORDER; cx.lineWidth=1; cx.strokeRect(PAD,cy,cW,chartH);
+  cx.strokeStyle=BORDER; cx.lineWidth=1.5; cx.strokeRect(PAD,cy,cW,chartH);
   const px0=PAD+LM, py0=cy+TM, pw=cW-LM-RM, ph=chartH-TM-BM;
 
   // Y range
   const allV=[];
   stored.datasets.forEach(ds=>ds.data.forEach(v=>{if(v!=null)allV.push(v);}));
   if(!allV.length) return null;
-  const vMin=Math.min(...allV),vMax=Math.max(...allV);
+  const vMin=Math.min(...allV), vMax=Math.max(...allV);
   const vPad=Math.max((vMax-vMin)*0.12,0.5);
   const vLo=Math.floor((vMin-vPad)*2)/2, vHi=Math.ceil((vMax+vPad)*2)/2;
   const n=dates.length;
   const toX=i=>px0+(n>1?i/(n-1)*pw:pw/2);
   const toY=v=>py0+ph-(v-vLo)/(vHi-vLo)*ph;
 
-  // Y gridlines + labels
+  // Y gridlines + labels (larger, darker)
   const vR=vHi-vLo, vStep=vR>20?5:vR>10?2:1;
   for(let v=Math.ceil(vLo/vStep)*vStep;v<=vHi;v+=vStep){
     const y=toY(v); if(y<py0-1||y>py0+ph+1) continue;
-    cx.strokeStyle=GRID; cx.lineWidth=0.5; cx.setLineDash([3,3]);
+    cx.strokeStyle=GRID; cx.lineWidth=0.8; cx.setLineDash([4,4]);
     cx.beginPath(); cx.moveTo(px0,y); cx.lineTo(px0+pw,y); cx.stroke(); cx.setLineDash([]);
-    cx.fillStyle=MUTED; cx.font=NF(10); cx.textAlign='right';
-    cx.fillText(v.toFixed(1)+'%',px0-6,y+4);
+    cx.fillStyle=MUTED; cx.font=NF(14); cx.textAlign='right';
+    cx.fillText(v.toFixed(1)+'%', px0-8, y+5);
   }
 
-  // X gridlines + date labels (12 evenly spaced)
-  const nLbl=Math.min(12,n), lStep=Math.max(1,Math.floor(n/nLbl));
+  // X gridlines + labels (larger)
+  const nLbl=Math.min(10,n), lStep=Math.max(1,Math.floor(n/nLbl));
   cx.textAlign='center';
   for(let i=0;i<n;i+=lStep){
     const x=toX(i);
-    cx.strokeStyle=GRID; cx.lineWidth=0.3; cx.setLineDash([2,4]);
+    cx.strokeStyle=GRID; cx.lineWidth=0.5; cx.setLineDash([2,5]);
     cx.beginPath(); cx.moveTo(x,py0); cx.lineTo(x,py0+ph); cx.stroke(); cx.setLineDash([]);
-    cx.fillStyle=MUTED; cx.font=NF(9); cx.fillText(_fmtDL(dates[i]),x,py0+ph+18);
+    cx.fillStyle=MUTED; cx.font=NF(14); cx.fillText(_fmtDL(dates[i]), x, py0+ph+24);
   }
   cx.textAlign='left';
 
-  // Draw series lines
+  // Series lines — thick for WhatsApp
   stored.datasets.forEach(ds=>{
     if(!ds.data) return;
-    cx.save(); cx.strokeStyle=ds.borderColor||'#999'; cx.lineWidth=2.5; cx.setLineDash([]);
+    cx.save(); cx.strokeStyle=ds.borderColor||'#999'; cx.lineWidth=4.0; cx.setLineDash([]);
     cx.beginPath(); let started=false;
     for(let i=0;i<n;i++){
       const v=ds.data[i]; if(v==null){started=false;continue;}
@@ -3315,122 +3494,222 @@ function _drawSkewPng(key, title){
     cx.stroke(); cx.restore();
   });
 
-  // Legend (centred below chart)
+  // Legend (inside BM zone, centred, larger)
   const legDS=stored.datasets.filter(ds=>ds.data&&ds.data.some(v=>v!=null));
-  cx.font=B(11);
-  const legW=legDS.reduce((s,ds)=>s+36+cx.measureText(ds.label||'').width+16,0);
+  cx.font=B(15);
+  const legW=legDS.reduce((s,ds)=>s+42+cx.measureText(ds.label||'').width+20,0);
   let lx=Math.max(px0,(W-legW)/2);
-  const ly=py0+ph+33;
+  const ly=py0+ph+42;
   legDS.forEach(ds=>{
-    cx.strokeStyle=ds.borderColor||'#999'; cx.lineWidth=2.5; cx.setLineDash([]);
-    cx.beginPath(); cx.moveTo(lx,ly); cx.lineTo(lx+26,ly); cx.stroke();
-    cx.fillStyle=DARK; cx.font=B(11); cx.textAlign='left';
-    cx.fillText(ds.label||'',lx+30,ly+4);
-    lx+=30+cx.measureText(ds.label||'').width+18;
+    cx.strokeStyle=ds.borderColor||'#999'; cx.lineWidth=4; cx.setLineDash([]);
+    cx.beginPath(); cx.moveTo(lx,ly); cx.lineTo(lx+30,ly); cx.stroke();
+    cx.fillStyle=DARK; cx.font=B(15); cx.textAlign='left';
+    cx.fillText(ds.label||'', lx+34, ly+5);
+    lx+=34+cx.measureText(ds.label||'').width+22;
   });
 
-  // Latest values + 1d/1w changes
+  // ── Latest values ─────────────────────────────────────────────────────────
   function lastNonNull(data){ for(let i=data.length-1;i>=0;i--){ if(data[i]!=null) return data[i]; } return null; }
-  function nthFromLast(data,n){ let c=0; for(let i=data.length-1;i>=0;i--){ if(data[i]!=null){ c++; if(c===n) return data[i]; } } return null; }
-  function fmtChg(v){ if(v==null) return '—'; const s=v>=0?'+':''; return s+v.toFixed(1); }
+  function nthFromLast(data,k){ let c=0; for(let i=data.length-1;i>=0;i--){ if(data[i]!=null){ c++; if(c===k) return data[i]; } } return null; }
+  function fmtChg(v){ if(v==null) return '—'; return (v>=0?'+':'')+v.toFixed(1); }
   function chgColor(v){ return v==null?MUTED: v>0?'#16a34a': v<0?'#dc2626': MUTED; }
-  const statsY = ly + 22;
-  cx.strokeStyle=BORDER; cx.lineWidth=0.5; cx.setLineDash([]);
-  cx.beginPath(); cx.moveTo(PAD, statsY-10); cx.lineTo(W-PAD, statsY-10); cx.stroke();
-  if(stored.datasets.length >= 2){
-    const cV = lastNonNull(stored.datasets[0].data);
-    const pV = lastNonNull(stored.datasets[1].data);
-    if(cV != null && pV != null){
-      const diff = cV - pV, sign = diff >= 0 ? '+' : '';
-      cx.textAlign = 'center';
-      cx.font = NF(11); cx.fillStyle = MUTED; cx.fillText('Latest:', PAD+36, statsY+3);
-      cx.font = B(12);
-      cx.fillStyle = C_CALL; cx.fillText(stored.datasets[0].label+': '+cV.toFixed(1)+'%', W/2-140, statsY+3);
-      cx.fillStyle = C_PUT;  cx.fillText(stored.datasets[1].label+': '+pV.toFixed(1)+'%', W/2+10,   statsY+3);
-      cx.fillStyle = GOLD;   cx.fillText('C−P: '+sign+diff.toFixed(1)+' vol pts',        W/2+170,  statsY+3);
-      cx.textAlign = 'left';
+
+  const statsY=cy+chartH+10;
+  cx.strokeStyle=BORDER; cx.lineWidth=1.2; cx.setLineDash([]);
+  cx.beginPath(); cx.moveTo(PAD,statsY); cx.lineTo(W-PAD,statsY); cx.stroke();
+  const sY=statsY+32;  // text baseline
+
+  const _settleLabel = 'Settle:';
+  const _liveV = (D.atm_iv && _skewStripTkr) ? D.atm_iv[_skewStripTkr] : null;
+
+  if(stored.datasets.length>=2){
+    const cV=lastNonNull(stored.datasets[0].data), pV=lastNonNull(stored.datasets[1].data);
+    if(cV!=null&&pV!=null){
+      const diff=cV-pV, sign=diff>=0?'+':'';
+      cx.font=NF(15); cx.fillStyle=MUTED; cx.textAlign='left'; cx.fillText(_settleLabel, PAD+8, sY);
+      const lblW=cx.measureText(_settleLabel).width;
+      let sx=PAD+8+lblW+12;
+      cx.font=B(19);
+      cx.fillStyle=C_CALL; cx.fillText(stored.datasets[0].label+':  '+cV.toFixed(1)+'%', sx, sY);
+      sx+=cx.measureText(stored.datasets[0].label+':  '+cV.toFixed(1)+'%').width+32;
+      cx.fillStyle=C_PUT;  cx.fillText(stored.datasets[1].label+':  '+pV.toFixed(1)+'%', sx, sY);
+      sx+=cx.measureText(stored.datasets[1].label+':  '+pV.toFixed(1)+'%').width+32;
+      cx.fillStyle=GOLD;   cx.fillText('C−P:  '+sign+diff.toFixed(1)+' vol pts', sx, sY);
     }
-  } else if(stored.datasets.length === 1){
-    const aV = lastNonNull(stored.datasets[0].data);
-    if(aV != null){
-      cx.textAlign = 'center';
-      cx.font = NF(11); cx.fillStyle = MUTED; cx.fillText('Latest:', PAD+36, statsY+3);
-      cx.font = B(12); cx.fillStyle = C_ATM;
-      cx.fillText('ATM IV: '+aV.toFixed(1)+'%', W/2, statsY+3);
-      cx.textAlign = 'left';
+  } else if(stored.datasets.length===1){
+    const aV=lastNonNull(stored.datasets[0].data);
+    if(aV!=null){
+      cx.font=NF(15); cx.fillStyle=MUTED; cx.textAlign='left'; cx.fillText(_settleLabel, PAD+8, sY);
+      const lblW=cx.measureText(_settleLabel).width;
+      cx.font=B(19); cx.fillStyle=C_ATM;
+      const atmStr='ATM IV:  '+aV.toFixed(1)+'%';
+      cx.fillText(atmStr, PAD+8+lblW+12, sY);
+      if(_liveV!=null){
+        const sepX=PAD+8+lblW+12+cx.measureText(atmStr).width+28;
+        cx.font=NF(15); cx.fillStyle=MUTED; cx.fillText('│  Live:', sepX, sY);
+        const lw=cx.measureText('│  Live:').width;
+        cx.font=B(19); cx.fillStyle='#22c55e';
+        cx.fillText(_liveV.toFixed(1)+'%', sepX+lw+8, sY);
+      }
     }
   }
 
-  // Δ1d / Δ1w change row
-  const chgY = statsY + 22;
-  cx.strokeStyle=BORDER; cx.lineWidth=0.5; cx.setLineDash([]);
-  cx.beginPath(); cx.moveTo(PAD, chgY-10); cx.lineTo(W-PAD, chgY-10); cx.stroke();
+  // ── Δ1d / Δ1w row ─────────────────────────────────────────────────────────
+  const chgY=statsY+statsH;
+  cx.strokeStyle=BORDER; cx.lineWidth=1.2; cx.setLineDash([]);
+  cx.beginPath(); cx.moveTo(PAD,chgY); cx.lineTo(W-PAD,chgY); cx.stroke();
+  const cY=chgY+30;  // text baseline
 
-  if(stored.datasets.length >= 2){
-    const d0 = stored.datasets[0].data, d1 = stored.datasets[1].data;
-    const c1d = lastNonNull(d0), p1d = lastNonNull(d1);
-    const cPrev1 = nthFromLast(d0,2), pPrev1 = nthFromLast(d1,2);
-    const cPrev5 = nthFromLast(d0,6), pPrev5 = nthFromLast(d1,6);
-    const dC1d = (c1d!=null&&cPrev1!=null)?+(c1d-cPrev1).toFixed(1):null;
-    const dP1d = (p1d!=null&&pPrev1!=null)?+(p1d-pPrev1).toFixed(1):null;
-    const dC1w = (c1d!=null&&cPrev5!=null)?+(c1d-cPrev5).toFixed(1):null;
-    const dP1w = (p1d!=null&&pPrev5!=null)?+(p1d-pPrev5).toFixed(1):null;
+  if(stored.datasets.length>=2){
+    const d0=stored.datasets[0].data, d1=stored.datasets[1].data;
+    const c1d=lastNonNull(d0), p1d=lastNonNull(d1);
+    const cP1=nthFromLast(d0,2), pP1=nthFromLast(d1,2);
+    const cP5=nthFromLast(d0,6), pP5=nthFromLast(d1,6);
+    const dC1d=(c1d!=null&&cP1!=null)?+(c1d-cP1).toFixed(1):null;
+    const dP1d=(p1d!=null&&pP1!=null)?+(p1d-pP1).toFixed(1):null;
+    const dC1w=(c1d!=null&&cP5!=null)?+(c1d-cP5).toFixed(1):null;
+    const dP1w=(p1d!=null&&pP5!=null)?+(p1d-pP5).toFixed(1):null;
     const sp0=(c1d!=null&&p1d!=null)?c1d-p1d:null;
-    const sp1=(cPrev1!=null&&pPrev1!=null)?cPrev1-pPrev1:null;
-    const sp5=(cPrev5!=null&&pPrev5!=null)?cPrev5-pPrev5:null;
-    const dSp1d=(sp0!=null&&sp1!=null)?+(sp0-sp1).toFixed(1):null;
-    const dSp1w=(sp0!=null&&sp5!=null)?+(sp0-sp5).toFixed(1):null;
-    const lbl0 = stored.datasets[0].label.split(' ')[0];
-    const lbl1 = stored.datasets[1].label.split(' ')[0];
-    // Δ1d section
-    cx.font=NF(10); cx.fillStyle=MUTED; cx.textAlign='left';
-    cx.fillText('Δ 1d', PAD+6, chgY+3);
-    cx.font=B(10);
-    cx.fillStyle=C_CALL; cx.fillText(lbl0+' Call: ', PAD+50, chgY+3);
-    const w0=cx.measureText(lbl0+' Call: ').width;
-    cx.fillStyle=chgColor(dC1d); cx.fillText(fmtChg(dC1d)+'%', PAD+50+w0, chgY+3);
-    cx.fillStyle=C_PUT;  cx.fillText(lbl0+' Put: ', PAD+140, chgY+3);
-    const w1=cx.measureText(lbl0+' Put: ').width;
-    cx.fillStyle=chgColor(dP1d); cx.fillText(fmtChg(dP1d)+'%', PAD+140+w1, chgY+3);
-    cx.fillStyle=GOLD; cx.fillText('C−P: ', PAD+240, chgY+3);
-    const w2=cx.measureText('C−P: ').width;
-    cx.fillStyle=chgColor(dSp1d); cx.fillText(fmtChg(dSp1d), PAD+240+w2, chgY+3);
-    // Δ1w section (right half)
-    const rx=W/2+20;
-    cx.font=NF(10); cx.fillStyle=MUTED;
-    cx.fillText('Δ 1w', rx, chgY+3);
-    cx.font=B(10);
-    cx.fillStyle=C_CALL; cx.fillText(lbl0+' Call: ', rx+44, chgY+3);
-    const w3=cx.measureText(lbl0+' Call: ').width;
-    cx.fillStyle=chgColor(dC1w); cx.fillText(fmtChg(dC1w)+'%', rx+44+w3, chgY+3);
-    cx.fillStyle=C_PUT;  cx.fillText(lbl0+' Put: ', rx+134, chgY+3);
-    const w4=cx.measureText(lbl0+' Put: ').width;
-    cx.fillStyle=chgColor(dP1w); cx.fillText(fmtChg(dP1w)+'%', rx+134+w4, chgY+3);
-    cx.fillStyle=GOLD; cx.fillText('C−P: ', rx+234, chgY+3);
-    const w5=cx.measureText('C−P: ').width;
-    cx.fillStyle=chgColor(dSp1w); cx.fillText(fmtChg(dSp1w), rx+234+w5, chgY+3);
-    cx.textAlign='left';
-  } else if(stored.datasets.length === 1){
+    const sp1=(cP1!=null&&pP1!=null)?cP1-pP1:null;
+    const sp5=(cP5!=null&&pP5!=null)?cP5-pP5:null;
+    const dS1d=(sp0!=null&&sp1!=null)?+(sp0-sp1).toFixed(1):null;
+    const dS1w=(sp0!=null&&sp5!=null)?+(sp0-sp5).toFixed(1):null;
+    const lbl0=stored.datasets[0].label.split(' ')[0];
+    // Δ1d (left half)
+    let x=PAD+8;
+    cx.font=B(16); cx.fillStyle=MUTED; cx.textAlign='left'; cx.fillText('Δ 1d', x, cY); x+=62;
+    let t; cx.font=B(16);
+    cx.fillStyle=C_CALL; t=lbl0+' C: '; cx.fillText(t,x,cY); x+=cx.measureText(t).width;
+    cx.fillStyle=chgColor(dC1d); t=fmtChg(dC1d)+'%'; cx.fillText(t,x,cY); x+=cx.measureText(t).width+18;
+    cx.fillStyle=C_PUT;  t=lbl0+' P: '; cx.fillText(t,x,cY); x+=cx.measureText(t).width;
+    cx.fillStyle=chgColor(dP1d); t=fmtChg(dP1d)+'%'; cx.fillText(t,x,cY); x+=cx.measureText(t).width+18;
+    cx.fillStyle=GOLD;   t='C−P: '; cx.fillText(t,x,cY); x+=cx.measureText(t).width;
+    cx.fillStyle=chgColor(dS1d); cx.fillText(fmtChg(dS1d),x,cY);
+    // Δ1w (right half)
+    x=W/2+20;
+    cx.font=B(16); cx.fillStyle=MUTED; cx.fillText('Δ 1w',x,cY); x+=62;
+    cx.fillStyle=C_CALL; t=lbl0+' C: '; cx.fillText(t,x,cY); x+=cx.measureText(t).width;
+    cx.fillStyle=chgColor(dC1w); t=fmtChg(dC1w)+'%'; cx.fillText(t,x,cY); x+=cx.measureText(t).width+18;
+    cx.fillStyle=C_PUT;  t=lbl0+' P: '; cx.fillText(t,x,cY); x+=cx.measureText(t).width;
+    cx.fillStyle=chgColor(dP1w); t=fmtChg(dP1w)+'%'; cx.fillText(t,x,cY); x+=cx.measureText(t).width+18;
+    cx.fillStyle=GOLD;   t='C−P: '; cx.fillText(t,x,cY); x+=cx.measureText(t).width;
+    cx.fillStyle=chgColor(dS1w); cx.fillText(fmtChg(dS1w),x,cY);
+  } else if(stored.datasets.length===1){
     const d0=stored.datasets[0].data;
-    const v1d=lastNonNull(d0), prev1=nthFromLast(d0,2), prev5=nthFromLast(d0,6);
-    const d1d=(v1d!=null&&prev1!=null)?+(v1d-prev1).toFixed(1):null;
-    const d1w=(v1d!=null&&prev5!=null)?+(v1d-prev5).toFixed(1):null;
-    cx.font=NF(10); cx.fillStyle=MUTED; cx.textAlign='left';
-    cx.fillText('Δ 1d', PAD+6, chgY+3);
-    cx.font=B(11); cx.fillStyle=chgColor(d1d);
-    cx.fillText(fmtChg(d1d)+'%', PAD+50, chgY+3);
-    cx.font=NF(10); cx.fillStyle=MUTED;
-    cx.fillText('Δ 1w', W/2+20, chgY+3);
-    cx.font=B(11); cx.fillStyle=chgColor(d1w);
-    cx.fillText(fmtChg(d1w)+'%', W/2+64, chgY+3);
-    cx.textAlign='left';
+    const v1d=lastNonNull(d0), pr1=nthFromLast(d0,2), pr5=nthFromLast(d0,6);
+    const d1d=(v1d!=null&&pr1!=null)?+(v1d-pr1).toFixed(1):null;
+    const d1w=(v1d!=null&&pr5!=null)?+(v1d-pr5).toFixed(1):null;
+    cx.font=B(16); cx.fillStyle=MUTED; cx.textAlign='left';
+    cx.fillText('Δ 1d', PAD+8, cY);
+    cx.font=B(19); cx.fillStyle=chgColor(d1d);
+    cx.fillText(fmtChg(d1d)+'%', PAD+70, cY);
+    cx.font=B(16); cx.fillStyle=MUTED;
+    cx.fillText('Δ 1w', W/2+20, cY);
+    cx.font=B(19); cx.fillStyle=chgColor(d1w);
+    cx.fillText(fmtChg(d1w)+'%', W/2+82, cY);
   }
 
-  // Footer
-  cx.fillStyle='#94a3b8'; cx.font=NF(10); cx.textAlign='right';
-  cx.fillText((D.commodity_name||'CT Options')+' Analytics  ·  VLM Commodities  ·  '+(D.last_date||''),W-PAD,H-10);
+  // ── Footer ───────────────────────────────────────────────────────────────
+  const footY=chgY+chgHt;
+  cx.fillStyle='#e8ecf0'; cx.fillRect(0,footY,W,footH);
+  cx.strokeStyle=BORDER; cx.lineWidth=0.8;
+  cx.beginPath(); cx.moveTo(0,footY); cx.lineTo(W,footY); cx.stroke();
+  cx.fillStyle=MUTED; cx.font=NF(14); cx.textAlign='right';
+  cx.fillText((D.commodity_name||(D.commodity||'CT')+' Options')+
+    ' Analytics  ·  VLM Commodities  ·  '+(D.last_date||''), W-PAD, footY+30);
+  cx.textAlign='left';
   return cnv;
 }
+
+// ── Settlement Status Poll ────────────────────────────────────────────────────
+// Polls /api/settle-status every 60s. When settle_watcher.py writes settlement
+// data to the CSVs it also writes settle_status.json. On change: reload data
+// and show a dismissible banner that persists until the user clicks X.
+
+// ── Settlement Status — two independent banners (futures / options) ──────────
+// settle_watcher.py writes settle_status.json when each settlement is detected.
+// Futures typically 14:30–14:45 ET (EOD button ready), options 14:45–15:30 ET.
+// Each banner is independently dismissible and persists until user clicks X.
+
+let _lastSettleStatus = null;
+
+function dismissBanner(type) {
+  const el = document.getElementById('settle-banner-' + type);
+  if(el) el.style.display = 'none';
+  const date = _lastSettleStatus && _lastSettleStatus.date;
+  if(date) sessionStorage.setItem('vlm_settle_dismissed_' + type + '_' + date, '1');
+}
+
+function _showBanner(type, text, date) {
+  if(sessionStorage.getItem('vlm_settle_dismissed_' + type + '_' + date)) return;
+  const el  = document.getElementById('settle-banner-' + type);
+  const txt = document.getElementById('settle-banner-' + type + '-text');
+  if(el && txt){ txt.textContent = text; el.style.display = 'flex'; }
+}
+
+async function _pollSettleStatus(){
+  try {
+    const resp = await fetch('/api/settle-status');
+    if(!resp.ok) return;
+    const s = await resp.json();
+    if(!s || !s.date) return;
+
+    const today = new Date().toISOString().slice(0,10);
+    if(s.date !== today) return;  // stale status from a prior day — ignore
+
+    const wasFut = _lastSettleStatus && _lastSettleStatus.futures_settled;
+    const wasOpt = _lastSettleStatus && _lastSettleStatus.options_settled;
+    const newFut = s.futures_settled && !wasFut;
+    const newOpt = s.options_settled && !wasOpt;
+
+    _lastSettleStatus = s;
+
+    // Futures banner
+    if(s.futures_settled)
+      _showBanner('fut', '⚡ Futures settled — ' + (s.futures_time || ''), s.date);
+
+    // Options banner
+    if(s.options_settled)
+      _showBanner('opt', '⚡ Options settled — ' + (s.options_time || ''), s.date);
+
+    // Auto-reload data on any new settlement event
+    if(newFut || newOpt){
+      console.log('[settle] Settlement detected (' + (newFut?'futures ':'') + (newOpt?'options':'') + ') — reloading data');
+      await loadAndRender(D.commodity || 'CT');
+    }
+  } catch(e) { /* silently ignore network errors */ }
+}
+
+// Check immediately on page load, then every 60 seconds
+_pollSettleStatus();
+setInterval(_pollSettleStatus, 60000);
+
+// ── Watcher-down alert — polls every 90s during settlement window ─────────────
+async function _pollWatcherStatus(){
+  try {
+    const resp = await fetch('/api/watcher-status');
+    if(!resp.ok) return;
+    const s = await resp.json();
+    const banner = document.getElementById('watcher-down-banner');
+    if(!banner) return;
+    if(s.in_settle_window && !s.running && !s.both_settled){
+      banner.style.display = 'flex';
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch(e) { /* ignore */ }
+}
+_pollWatcherStatus();
+setInterval(_pollWatcherStatus, 90000);
+
+// ── Silent cache warmer — keeps server cache fresh near market close ──────────
+// Fetches data every 3 min without rendering. Ensures the stale straddle guard
+// always has values from within the last 3 min when RTD goes offline at close.
+// No visible effect — result is discarded. Manual refresh is unaffected.
+setInterval(async () => {
+  try { await fetch('/api/data?commodity=' + (D.commodity || 'CT')); }
+  catch(e) {}
+}, 3 * 60 * 1000);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const _savedCommod = localStorage.getItem('vlm_commodity');
@@ -3456,11 +3735,12 @@ function renderStraddles(){
 
   const rows = D.straddles;
 
-  // Date stamp in title
-  if(titleEl && D.last_date){
-    const [y,m,d] = D.last_date.split('-');
+  if(titleEl){
     const months = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    titleEl.textContent = `Cotton Straddles — ${+d} ${months[+m]} ${y}`;
+    const t = new Date();
+    const dateStr = `${t.getDate()} ${months[t.getMonth()+1]} ${t.getFullYear()}`;
+    const commLabel = D.commodity_name ? D.commodity_name.replace(' Options','').replace(' Analytics','') : (D.commodity||'CT');
+    titleEl.textContent = `${commLabel} Straddles — ${dateStr}`;
   }
 
   if(!rows || !rows.length){
@@ -3472,7 +3752,7 @@ function renderStraddles(){
   const live = D.data_source && D.data_source.includes('live');
   srcEl.textContent = live ? `Live · ${D.data_source}` : `Settle · ${D.last_date}`;
 
-  const TD  = 'padding:6px 10px;border-bottom:1px solid #dde3ed;font-variant-numeric:tabular-nums';
+  const TD  = 'padding:6px 10px;border-bottom:1px solid #dde3ed;font-variant-numeric:tabular-nums;color:#111';
   const TDR = TD + ';text-align:right';
   const TDL = TD + ';text-align:left';
 
@@ -3481,7 +3761,8 @@ function renderStraddles(){
   const fmtSgn = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2);
   const negClr = v => v == null ? '#222' : v < 0 ? '#c00000' : v > 0 ? '#1a6e2e' : '#222';
 
-  rows.forEach((r, i) => {
+  const displayRows = rows.filter(r => r.chg_vol == null || Math.abs(r.chg_vol) <= 5);
+  displayRows.forEach((r, i) => {
     const bg = i % 2 === 0 ? '#ffffff' : '#f0f4fb';
     tbody.innerHTML += `<tr style="background:${bg}">
       <td style="${TDL};font-weight:700;color:#1a3a6e">${r.label || r.ticker}</td>
@@ -3502,7 +3783,7 @@ async function refreshStraddles(){
   const btn = event.target;
   btn.disabled = true; btn.textContent = '↻ Loading…';
   try {
-    const resp = await fetch('/api/data?commodity=CT');
+    const resp = await fetch('/api/data?commodity=' + (D.commodity || 'CT'));
     D = await resp.json();
     renderStraddles();
   } catch(e) {
@@ -3510,6 +3791,638 @@ async function refreshStraddles(){
   } finally {
     btn.disabled = false; btn.textContent = '↻ Refresh';
   }
+}
+
+function exportStraddlePanel(){
+  const rows = (D && D.straddles) || [];
+  const _expMon = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const _td = new Date();
+  const dateStr = `${_td.getDate()} ${_expMon[_td.getMonth()+1]} ${_td.getFullYear()}`;
+
+  const timeStr = new Date().toLocaleTimeString('en-US', {
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York'
+  });
+
+  // VLM palette — consistent with EOD and COT report
+  const C = {
+    hdrBg:   '#1a1a2e',
+    gold:    '#E8C547',
+    colBg:   '#2c3e50',
+    rowOdd:  '#ffffff',
+    rowEven: '#f4f6f9',
+    rowLine: '#dde3ed',
+    lblCol:  '#1e3a5f',
+    txt:     '#111111',
+    grn:     '#15803d',
+    red:     '#b91c1c',
+    white:   '#ffffff',
+    dim:     'rgba(255,255,255,0.58)',
+  };
+  const negClr = v => v == null ? C.txt : v < 0 ? C.red : v > 0 ? C.grn : C.txt;
+
+  const COLS = ['Contract','Strike','Value','ATM Vol','% CHG Vol','Settlement','Change','DTE','Expiration','Breakeven'];
+  const ROW_H    = 52;
+  const HDR_H    = 84;
+  const ACCENT   = 4;
+  const COL_H    = 44;
+  const FOOTER_H = 30;
+  const PAD      = 16;
+  const FONT     = 21;
+
+  const W = [170, 84, 96, 108, 116, 112, 94, 72, 134, 94]; // sum = 1080
+  const totalW = W.reduce((a,b) => a+b, 0);
+  const exportRows = rows.filter(r => r.chg_vol == null || Math.abs(r.chg_vol) <= 5);
+  const totalH = HDR_H + ACCENT + COL_H + exportRows.length * ROW_H + FOOTER_H;
+
+  const cv = document.createElement('canvas');
+  cv.width  = totalW;
+  cv.height = totalH;
+  const ctx = cv.getContext('2d');
+
+  // Page background
+  ctx.fillStyle = '#f4f6f9';
+  ctx.fillRect(0, 0, totalW, totalH);
+
+  // Header bar
+  ctx.fillStyle = C.hdrBg;
+  ctx.fillRect(0, 0, totalW, HDR_H);
+
+  // Gold accent strip
+  ctx.fillStyle = C.gold;
+  ctx.fillRect(0, HDR_H, totalW, ACCENT);
+
+  // Company / report label (small, dimmed)
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = C.dim;
+  ctx.font = 'bold 12px Arial';
+  ctx.textAlign = 'left';
+  const _commLabel = D.commodity_name ? D.commodity_name.replace(' Options','').replace(' Analytics','') : (D.commodity||'CT');
+  ctx.fillText('VLM COMMODITIES  —  ICE ' + _commLabel.toUpperCase(), PAD, 20);
+
+  // Main title in gold
+  ctx.fillStyle = C.gold;
+  ctx.font = 'bold 28px Arial';
+  ctx.fillText('STRADDLES', PAD, HDR_H/2 + 9);
+
+  // Date top-right (dimmed)
+  ctx.fillStyle = C.dim;
+  ctx.font = '14px Arial';
+  ctx.textAlign = 'right';
+  if(dateStr) ctx.fillText(dateStr, totalW - PAD, 20);
+  ctx.fillText(timeStr + ' ET', totalW - PAD, HDR_H/2 + 9);
+
+  // Column header row
+  ctx.fillStyle = C.colBg;
+  ctx.fillRect(0, HDR_H + ACCENT, totalW, COL_H);
+  ctx.fillStyle = C.white;
+  ctx.font = 'bold 17px Arial';
+  ctx.textBaseline = 'middle';
+  let x = 0;
+  COLS.forEach((col, ci) => {
+    ctx.textAlign = ci === 0 ? 'left' : 'right';
+    ctx.fillText(col, ci === 0 ? x + PAD : x + W[ci] - PAD, HDR_H + ACCENT + COL_H / 2);
+    x += W[ci];
+  });
+
+  // Data rows
+  const fmt2   = v => v != null ? v.toFixed(2) : '—';
+  const fmtVol = v => v != null ? v.toFixed(2) + '%' : '—';
+  const fmtSgn = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2);
+
+  exportRows.forEach((r, i) => {
+    const ry = HDR_H + ACCENT + COL_H + i * ROW_H;
+    ctx.fillStyle = i % 2 === 0 ? C.rowOdd : C.rowEven;
+    ctx.fillRect(0, ry, totalW, ROW_H);
+    ctx.fillStyle = C.rowLine;
+    ctx.fillRect(0, ry + ROW_H - 1, totalW, 1);
+    ctx.textBaseline = 'middle';
+
+    const vals = [
+      { v: r.label || r.ticker,                            color: C.lblCol, bold: true,  align: 'left'  },
+      { v: r.strike != null ? r.strike.toFixed(0) : '—',  color: C.txt,                 align: 'right' },
+      { v: fmt2(r.value),                                  color: C.txt,    bold: true,  align: 'right' },
+      { v: fmtVol(r.atm_vol),                              color: C.txt,                 align: 'right' },
+      { v: fmtSgn(r.chg_vol),                              color: negClr(r.chg_vol),     align: 'right' },
+      { v: fmt2(r.prev),                                   color: C.txt,                 align: 'right' },
+      { v: fmtSgn(r.change),                               color: negClr(r.change),      align: 'right' },
+      { v: r.dte != null ? String(r.dte) : '—',           color: C.txt,                 align: 'right' },
+      { v: _fmtStradDate(r.expiry),                        color: '#555',                align: 'right' },
+      { v: fmt2(r.breakeven),                              color: C.txt,                 align: 'right' },
+    ];
+
+    x = 0;
+    vals.forEach((cell, ci) => {
+      ctx.fillStyle = cell.color;
+      ctx.font = (cell.bold ? 'bold ' : '') + `${FONT}px Arial`;
+      ctx.textAlign = cell.align;
+      ctx.fillText(cell.v, cell.align === 'left' ? x + PAD : x + W[ci] - PAD, ry + ROW_H / 2);
+      x += W[ci];
+    });
+  });
+
+  // Footer bar
+  const footerY = HDR_H + ACCENT + COL_H + exportRows.length * ROW_H;
+  ctx.fillStyle = C.hdrBg;
+  ctx.fillRect(0, footerY, totalW, FOOTER_H);
+  ctx.fillStyle = C.dim;
+  ctx.font = '12px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    'VLM Commodities  |  ICE ' + _commLabel.toUpperCase() + '  |  ' + (dateStr || ''),
+    totalW / 2, footerY + FOOTER_H / 2
+  );
+
+  _finishExport(cv, `${(D.commodity||'ct').toLowerCase()}_straddles${dateStr ? '_' + dateStr.replace(/ /g,'_') : ''}.png`);
+}
+
+// ── PUSH TO SITE ──────────────────────────────────────────────────────────────
+const _PUSH_URL    = '/push-to-vlm';  // Flask proxy — secret lives server-side, never in JS
+const _PUSH_TYPE   = {
+  'panel-smile':    'vol_smile',
+  'panel-surface':  'vol_surface',
+  'panel-skew':     'skew_history',
+  'panel-straddles':'straddle',
+};
+
+function updatePushBtn(){
+  const btn = document.getElementById('btn-push');
+  if(!btn) return;
+  const p = document.querySelector('.panel.active');
+  const panelId = p ? p.id : '';
+  btn.style.display = (panelId === 'panel-trade') ? 'none' : '';
+}
+
+function _buildSkewCombinedPng(){
+  return new Promise(res=>{
+    const available = SKEW_DEFS.filter(d=>_skewChartData[d.key]&&_skewChartData[d.key].dates.length>0);
+    if(!available.length){res(null);return;}
+    const canvases = available.map(d=>_drawSkewPng(d.key,d.label)).filter(Boolean);
+    if(!canvases.length){res(null);return;}
+    const cw=canvases[0].width, ch=canvases[0].height;
+    const cols=Math.min(2,canvases.length), rows=Math.ceil(canvases.length/2);
+    const combined=document.createElement('canvas');
+    combined.width=cols*cw; combined.height=rows*ch;
+    const cx=combined.getContext('2d');
+    canvases.forEach((c,i)=>cx.drawImage(c,(i%2)*cw,Math.floor(i/2)*ch));
+    combined.toBlob(b=>res(b),'image/png');
+  });
+}
+
+async function _capturePng(){
+  const p = document.querySelector('.panel.active');
+  const panelId = p ? p.id : '';
+  if(panelId==='panel-straddles'){
+    return new Promise(res=>{_pngCaptureResolve=res; exportStraddlePanel();});
+  }
+  if(panelId==='panel-surface'){
+    return new Promise(res=>{_pngCaptureResolve=res; exportSurfacePanel();});
+  }
+  if(panelId==='panel-skew'){
+    return _buildSkewCombinedPng();
+  }
+  // Vol Smile — pre-fill export modal fields with current state then call generatePng()
+  return new Promise(res=>{
+    _pngCaptureResolve=res;
+    document.getElementById('exp-client').value='';
+    const cur=document.getElementById('smile-expiry').value||activeExpiry;
+    if(cur) document.getElementById('exp-expiry').value=cur;
+    generatePng();
+  });
+}
+
+async function pushToSite(){
+  const btn=document.getElementById('btn-push');
+  const p=document.querySelector('.panel.active');
+  const panelId=p?p.id:'';
+  const type=_PUSH_TYPE[panelId];
+  if(!type) return;
+
+  const origText=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='Sending…';
+
+  try{
+    const blob=await _capturePng();
+    if(!blob) throw new Error('Nothing to capture');
+    const fd=new FormData();
+    fd.append('type',type);
+    fd.append('image',blob,'export.png');
+    if(type==='straddle'&&D&&D.straddles)
+      fd.append('rows',JSON.stringify(D.straddles));
+    const resp=await fetch(_PUSH_URL,{method:'POST',body:fd});
+    if(!resp.ok){
+      const txt=await resp.text().catch(()=>'HTTP '+resp.status);
+      throw new Error(txt||'HTTP '+resp.status);
+    }
+    btn.textContent='Sent ✓';
+    setTimeout(()=>{btn.textContent=origText;btn.disabled=false;},2000);
+  }catch(e){
+    btn.textContent=e.message||'Error';
+    setTimeout(()=>{btn.textContent=origText;btn.disabled=false;},3000);
+  }
+}
+
+// ── EOD Email Modal (PNG) ─────────────────────────────────────────────────────
+let _eodData   = null;
+let _eodCanvas = null;
+
+function _eodSetBtns(enabled){
+  ['eod-dl-btn','eod-push-btn','eod-email-btn'].forEach(id=>{
+    const b=document.getElementById(id);
+    if(b){ b.disabled=!enabled; b.style.opacity=enabled?'1':'.5'; }
+  });
+}
+
+function openEodEmail(){
+  const modal   = document.getElementById('eod-modal');
+  const content = document.getElementById('eod-content');
+  modal.style.display = 'block';
+  content.innerHTML = '<div style="text-align:center;padding:40px;color:#888">Generating report&#8230;</div>';
+  _eodSetBtns(false);
+  try {
+    const data = _buildEodData();
+    _eodData   = data;
+    _eodCanvas = _buildEodCanvas(data);
+    const src  = _eodCanvas.toDataURL('image/png');
+    content.innerHTML = `<img style="width:100%;display:block;border:1px solid #dde3ed;border-radius:4px" src="${src}">`;
+    _eodSetBtns(true);
+  } catch(e) {
+    content.innerHTML = `<div style="color:#c00;padding:20px">Failed: ${e.message}</div>`;
+  }
+}
+
+function _buildEodData(){
+  const MC  = {F:1,G:2,H:3,J:4,K:5,M:6,N:7,Q:8,U:9,V:10,X:11,Z:12};
+  const STD = new Set([3,5,7,12]);
+  function parseTkr(t){
+    const m = t && t.match(/^[A-Z]{2}([FGHJKMNQUVXZ])(\d+)$/);
+    if(!m) return null;
+    const yy=parseInt(m[2]);
+    const year = yy>=100 ? yy : yy<10 ? 2020+yy : yy>=50 ? 1900+yy : 2000+yy;
+    return {month:MC[m[1]], year};
+  }
+  const _mn = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  const timeStr = new Date().toLocaleTimeString('en-US',{
+    hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'America/New_York'
+  }) + ' ET';
+
+  const lf     = D.live_futures   || {};
+  const spr    = D.rtd_spreads    || {};
+  const hvSrc  = D.hv_data        || {};
+  const labels = D.expiry_labels  || {};
+
+  const stdTkrs = (D.expiries||[]).filter(t=>{ const p=parseTkr(t); return p&&STD.has(p.month); });
+
+  // Futures rows — settle-to-settle change for EOD.
+  // D.futures (CSV) is always populated; use it as fallback when RTD settle is absent.
+  const futures = stdTkrs.map(tkr=>{
+    const f=lf[tkr]||{};
+    const stt = f.settle??D.futures[tkr]??null;
+    const ys  = f.yest_settle??null;
+    const chg = (stt!=null&&ys!=null) ? +((stt-ys).toFixed(4)) : null;
+    const pct = (chg!=null&&ys&&ys!==0) ? +((chg/ys*100).toFixed(4)) : null;
+    return {label:labels[tkr]||tkr, settle:stt, yest_settle:ys,
+            change:chg, pct_chg:pct, high:f.high??null, low:f.low??null,
+            volume:f.volume??null, efp_vol:f.efp_vol??null, efs_vol:f.efs_vol??null,
+            block_vol:f.block_vol??null, oi:f.oi??null, oi_chg:f.oi_chg??null};
+  });
+
+  // Spread rows — consecutive pairs + Dec/Dec year spread in order
+  const spreadRows=[], seen=new Set();
+  const decTkrs=stdTkrs.filter(t=>{ const p=parseTkr(t); return p&&p.month===12; });
+  let yearDone=false;
+
+  function addSpread(near,far){
+    const key=`${near}/${far}`;
+    if(seen.has(key)) return;
+    seen.add(key);
+    if(spr[key]){
+      // RTD spread — compute settle-to-settle change for EOD (not the intraday change field)
+      const s=spr[key];
+      const ss=s.settle??null, sy=s.yest_settle??null;
+      const sc=(ss!=null&&sy!=null)?+((ss-sy).toFixed(4)):null;
+      const sp=(sc!=null&&sy&&sy!==0)?+((sc/Math.abs(sy)*100).toFixed(4)):null;
+      spreadRows.push({display:s.display,settle:ss,yest_settle:sy,
+                       change:sc,pct_chg:sp,high:s.high??null,low:s.low??null,volume:s.volume??null});
+      return;
+    }
+    // Computed fallback — outright settle difference; High/Low not available
+    const fn=lf[near]||{}, ff=lf[far]||{};
+    const sn=fn.settle, sf=ff.settle;
+    if(sn==null||sf==null) return;
+    const stt  = +(sn-sf).toFixed(4);
+    const yn=fn.yest_settle, yf=ff.yest_settle;
+    const yest = (yn!=null&&yf!=null) ? +(yn-yf).toFixed(4) : null;
+    const chg  = yest!=null ? +(stt-yest).toFixed(4) : null;
+    const pct  = (chg!=null&&yest&&yest!==0) ? +(chg/yest*100).toFixed(2) : null;
+    const pn=parseTkr(near), pf=parseTkr(far);
+    const disp = pn&&pf
+      ? `${_mn[pn.month]}${String(pn.year).slice(-2)}/${_mn[pf.month]}${String(pf.year).slice(-2)}`
+      : key;
+    spreadRows.push({display:disp,settle:stt,yest_settle:yest,change:chg,pct_chg:pct,high:null,low:null,volume:null});
+  }
+
+  for(let i=0;i<stdTkrs.length-1;i++){
+    addSpread(stdTkrs[i],stdTkrs[i+1]);
+    const p=parseTkr(stdTkrs[i]);
+    if(!yearDone && p && p.month===12 && decTkrs.length>=2){
+      yearDone=true;
+      addSpread(decTkrs[0],decTkrs[1]);
+    }
+  }
+
+  // HV rows
+  const hv = stdTkrs
+    .filter(t=>{ const h=hvSrc[t]||{}; return h.hv10||h.hv30||h.hv60||h.hv90; })
+    .map(t=>{ const h=hvSrc[t]||{}; return {label:labels[t]||t,hv10:h.hv10,hv30:h.hv30,hv60:h.hv60,hv90:h.hv90}; });
+
+  return {
+    date:      D.last_date || new Date().toISOString().slice(0,10),
+    time_et:   timeStr,
+    straddles: D.straddles || [],
+    futures,
+    spreads:   spreadRows,
+    hv,
+  };
+}
+
+function closeEodModal(){
+  document.getElementById('eod-modal').style.display = 'none';
+}
+
+function downloadEodPng(){
+  if(!_eodCanvas) return;
+  const _m = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dateStr = _eodData && _eodData.date
+    ? (([y,m,d]) => `${+d}_${_m[+m]}_${y}`)(_eodData.date.split('-'))
+    : new Date().toISOString().slice(0,10);
+  _finishExport(_eodCanvas, `CT_EOD_${dateStr}.png`);
+}
+
+async function pushEodToSite(){
+  const btn = document.getElementById('eod-push-btn');
+  if(!_eodCanvas || !btn) return;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const blob = await new Promise(res => _eodCanvas.toBlob(res, 'image/png'));
+    if(!blob) throw new Error('Canvas export failed');
+    const fd = new FormData();
+    fd.append('type',  'eod');
+    fd.append('image', blob, 'CT_EOD.png');
+    if(_eodData) fd.append('data', JSON.stringify({
+      straddles: _eodData.straddles || [],
+      futures:   _eodData.futures   || [],
+      spreads:   _eodData.spreads   || [],
+      hist_vol:  _eodData.hv        || [],
+    }));
+    const resp = await fetch(_PUSH_URL, {method:'POST', body:fd});
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    btn.textContent = 'Sent ✓';
+    setTimeout(()=>{ btn.textContent=orig; btn.disabled=false; }, 2500);
+  } catch(e) {
+    btn.textContent = e.message || 'Error';
+    setTimeout(()=>{ btn.textContent=orig; btn.disabled=false; }, 3000);
+  }
+}
+
+function draftEodEmail(){
+  if(!_eodCanvas || !_eodData) return;
+  const _m = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dateStr = _eodData.date
+    ? (([y,mo,d])=>`${+d} ${_m[+mo]} ${y}`)(_eodData.date.split('-'))
+    : new Date().toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric'});
+
+  // Download PNG first so it lands in Downloads ready to attach
+  downloadEodPng();
+
+  // mailto: always opens the default desktop mail client (Outlook desktop when configured)
+  // — unlike .eml files which open in whatever app owns the .eml association (often web Outlook)
+  const subject = encodeURIComponent(`VLM Cotton EOD Summary — ${dateStr}`);
+  const body    = encodeURIComponent(
+    `ICE Cotton No. 2 — End of Day Summary\r\n` +
+    `Date: ${dateStr}\r\n\r\n` +
+    `Please attach CT_EOD_${dateStr.replace(/ /g,'_')}.png from your Downloads folder.`
+  );
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+}
+
+function _buildEodCanvas(data){
+  const _m = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const fmtD = iso => { if(!iso) return ''; const[y,m,d]=iso.split('-'); return `${+d} ${_m[+m]} ${y}`; };
+  const fmtE = iso => { if(!iso) return '—'; const[y,m,d]=iso.split('-'); return `${+m}/${+d}/${y}`; };
+  const f2   = v => v!=null ? (+v).toFixed(2) : '—';
+  const f0   = v => v!=null ? String(Math.round(+v)) : '—';
+  const fz   = v => v!=null ? String(Math.round(+v)) : '0';  // null → '0' for volume/count fields
+  const fsgn = v => v==null ? '—' : ((+v)>=0?'+':'')+(+v).toFixed(2);
+  const fpct = v => v==null ? '—' : ((+v)>=0?'+':'')+(+v).toFixed(2)+'%';
+  const fvol = v => v!=null ? (+v).toFixed(2)+'%' : '—';
+  const fhv  = v => v!=null ? ((+v)*100).toFixed(2)+'%' : '—';
+
+  // VLM palette — matches COT report branding
+  const C = {
+    bg:      '#f4f6f9',
+    hdrBg:   '#1a1a2e',
+    gold:    '#E8C547',
+    secBg:   '#1a1a2e',
+    colBg:   '#2c3e50',
+    rowOdd:  '#ffffff',
+    rowEven: '#f4f6f9',
+    rowLine: '#dde3ed',
+    lblCol:  '#1e3a5f',
+    txt:     '#111111',
+    grn:     '#15803d',
+    red:     '#b91c1c',
+    white:   '#ffffff',
+    dim:     'rgba(255,255,255,0.58)',
+  };
+  const clr = v => v==null ? C.txt : (+v)<0 ? C.red : (+v)>0 ? C.grn : C.txt;
+
+  const TW       = 1200;
+  const TITLE_H  = 44;
+  const COL_H    = 36;
+  const ROW_H    = 42;
+  const PAD      = 16;
+  const FONT     = 19;
+  const FONT_SM  = 15;
+  const GAP      = 10;
+  const GLOBAL_H = 84;
+  const ACCENT   = 4;
+  const FOOTER_H = 30;
+
+  const STRAD_W = [200, 96,108,120,120,120, 96, 72,160,108];
+  const FUT_W   = [160, 90,100, 84, 84, 84, 84, 96, 72, 72, 72, 96,106];
+  const SPR_W   = [220,140,144,138,128,112,112,206]; // 8 cols — sum=1200
+  const HV_W    = [240,240,240,240,240];
+
+  const stradSrc = (data.straddles||[]).filter(r=>r.chg_vol==null||Math.abs(r.chg_vol)<=5);
+  const futSrc   = data.futures  || [];
+  const sprSrc   = data.spreads  || [];
+  const hvSrc    = data.hv       || [];
+
+  function sH(n){ return TITLE_H + COL_H + n*ROW_H; }
+  const totalH = GLOBAL_H + ACCENT + GAP
+    + sH(stradSrc.length) + GAP
+    + sH(futSrc.length)   + GAP
+    + sH(sprSrc.length)   + GAP
+    + sH(hvSrc.length)    + GAP
+    + FOOTER_H;
+
+  const cv = document.createElement('canvas');
+  cv.width  = TW;
+  cv.height = totalH;
+  const ctx = cv.getContext('2d');
+
+  // Page background
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, TW, totalH);
+
+  // ── Global header ──────────────────────────────────────────────────────────
+  ctx.fillStyle = C.hdrBg;
+  ctx.fillRect(0, 0, TW, GLOBAL_H);
+
+  // Gold accent strip under header
+  ctx.fillStyle = C.gold;
+  ctx.fillRect(0, GLOBAL_H, TW, ACCENT);
+
+  // Company / report label (small, dimmed)
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = C.dim;
+  ctx.font = 'bold 12px Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText('VLM COMMODITIES  —  ICE COTTON No. 2', PAD, 20);
+
+  // Main title in gold
+  ctx.fillStyle = C.gold;
+  ctx.font = 'bold 30px Arial';
+  ctx.fillText('END OF DAY SUMMARY', PAD, GLOBAL_H/2 + 9);
+
+  // Date top-right (dimmed)
+  ctx.fillStyle = C.dim;
+  ctx.font = '14px Arial';
+  ctx.textAlign = 'right';
+  if(data.date) ctx.fillText(fmtD(data.date), TW-PAD, 20);
+  ctx.fillText(data.time_et || '', TW-PAD, GLOBAL_H/2 + 9);
+
+  function drawSection(y0, title, colLabels, widths, rowData){
+    // Section title bar — dark navy, gold left-aligned
+    ctx.fillStyle = C.secBg;
+    ctx.fillRect(0, y0, TW, TITLE_H);
+    ctx.fillStyle = C.gold;
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('►  ' + title, PAD, y0+TITLE_H/2);
+
+    // Column header row
+    ctx.fillStyle = C.colBg;
+    ctx.fillRect(0, y0+TITLE_H, TW, COL_H);
+    ctx.fillStyle = C.white;
+    ctx.font = `bold ${FONT_SM}px Arial`;
+    let x = 0;
+    colLabels.forEach((lbl,ci)=>{
+      ctx.textAlign = ci===0 ? 'left' : 'right';
+      ctx.fillText(lbl, ci===0 ? x+PAD : x+widths[ci]-PAD, y0+TITLE_H+COL_H/2);
+      x += widths[ci];
+    });
+
+    // Data rows
+    rowData.forEach((cells,ri)=>{
+      const ry = y0 + TITLE_H + COL_H + ri*ROW_H;
+      ctx.fillStyle = ri%2===0 ? C.rowOdd : C.rowEven;
+      ctx.fillRect(0, ry, TW, ROW_H);
+      ctx.fillStyle = C.rowLine;
+      ctx.fillRect(0, ry+ROW_H-1, TW, 1);
+      x = 0;
+      cells.forEach((cell,ci)=>{
+        ctx.fillStyle = cell.color || C.txt;
+        ctx.font = (cell.bold ? 'bold ' : '') + `${FONT}px Arial`;
+        ctx.textAlign = cell.align || 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(cell.v, cell.align==='left' ? x+PAD : x+widths[ci]-PAD, ry+ROW_H/2);
+        x += widths[ci];
+      });
+    });
+    return TITLE_H + COL_H + rowData.length*ROW_H;
+  }
+
+  const stradData = stradSrc.map(r=>[
+    {v:r.label||r.ticker||'—',                      color:C.lblCol, bold:true, align:'left'},
+    {v:r.strike!=null?(+r.strike).toFixed(0):'—',   color:C.txt,              align:'right'},
+    {v:f2(r.value),                                  color:C.txt,   bold:true, align:'right'},
+    {v:fvol(r.atm_vol),                              color:C.txt,              align:'right'},
+    {v:fsgn(r.chg_vol),                              color:clr(r.chg_vol),     align:'right'},
+    {v:f2(r.prev),                                   color:C.txt,              align:'right'},
+    {v:fsgn(r.change),                               color:clr(r.change),      align:'right'},
+    {v:r.dte!=null?String(r.dte):'—',               color:C.txt,              align:'right'},
+    {v:fmtE(r.expiry),                               color:'#555',             align:'right'},
+    {v:f2(r.breakeven),                              color:C.txt,              align:'right'},
+  ]);
+
+  const futData = futSrc.map(r=>[
+    {v:r.label||'—',                                         color:C.lblCol, bold:true, align:'left'},
+    {v:f2(r.settle),                                         color:C.txt,    bold:true, align:'right'},
+    {v:f2(r.yest_settle),                                    color:C.txt,              align:'right'},
+    {v:fsgn(r.change),                                       color:clr(r.change),      align:'right'},
+    {v:fpct(r.pct_chg),                                      color:clr(r.pct_chg),     align:'right'},
+    {v:f2(r.high),                                           color:C.txt,              align:'right'},
+    {v:f2(r.low),                                            color:C.txt,              align:'right'},
+    {v:f0(r.volume),                                         color:C.txt,              align:'right'},
+    {v:fz(r.efp_vol),                                        color:C.txt,              align:'right'},
+    {v:fz(r.efs_vol),                                        color:C.txt,              align:'right'},
+    {v:fz(r.block_vol),                                      color:C.txt,              align:'right'},
+    {v:f0(r.oi),                                             color:C.txt,              align:'right'},
+    {v:r.oi_chg!=null?((+r.oi_chg)>=0?'+':'')+Math.round(+r.oi_chg):'—', color:clr(r.oi_chg), align:'right'},
+  ]);
+
+  const sprData = sprSrc.map(r=>[
+    {v:r.display||'—',    color:C.lblCol, bold:true, align:'left'},
+    {v:f2(r.settle),      color:C.txt,   bold:true, align:'right'},
+    {v:f2(r.yest_settle), color:C.txt,              align:'right'},
+    {v:fsgn(r.change),    color:clr(r.change),      align:'right'},
+    {v:fpct(r.pct_chg),   color:clr(r.pct_chg),     align:'right'},
+    {v:f2(r.high),        color:C.txt,              align:'right'},
+    {v:f2(r.low),         color:C.txt,              align:'right'},
+    {v:f0(r.volume),      color:C.txt,              align:'right'},
+  ]);
+
+  const hvData = hvSrc.map(r=>[
+    {v:r.label||'—', color:C.lblCol, bold:true, align:'left'},
+    {v:fhv(r.hv10),  color:C.txt,              align:'right'},
+    {v:fhv(r.hv30),  color:C.txt,              align:'right'},
+    {v:fhv(r.hv60),  color:C.txt,              align:'right'},
+    {v:fhv(r.hv90),  color:C.txt,              align:'right'},
+  ]);
+
+  let y = GLOBAL_H + ACCENT + GAP;
+  y += drawSection(y, 'STRADDLES',
+    ['Contract','Strike','Value','ATM Vol','% CHG Vol','Settlement','Change','DTE','Expiration','Breakeven'],
+    STRAD_W, stradData) + GAP;
+  y += drawSection(y, 'FUTURES',
+    ['Contract','Settle','Yest. Settle','Change','% Chg','High','Low','Volume','EFP','EFS','Block','OI','OI Chg'],
+    FUT_W, futData) + GAP;
+  y += drawSection(y, 'SPREADS',
+    ['Spread','Settle','Yest. Settle','Change','% Chg','High','Low','Volume'],
+    SPR_W, sprData) + GAP;
+  y += drawSection(y, 'HISTORICAL VOLATILITY',
+    ['Contract','HV10','HV30','HV60','HV90'],
+    HV_W, hvData) + GAP;
+
+  // Footer bar
+  ctx.fillStyle = C.hdrBg;
+  ctx.fillRect(0, y, TW, FOOTER_H);
+  ctx.fillStyle = C.dim;
+  ctx.font = '12px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    'VLM Commodities  |  ICE Cotton No. 2  |  ' + (data.date ? fmtD(data.date) : ''),
+    TW/2, y + FOOTER_H/2
+  );
+
+  return cv;
 }
 </script>
 </body>

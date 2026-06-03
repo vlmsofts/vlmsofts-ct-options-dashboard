@@ -1,20 +1,14 @@
 from flask import Flask, render_template, jsonify, request
-import os, requests, csv, io, json, time, math, logging, threading
+import os, re, requests, csv, io, json, time, math, logging, threading
 from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
 
-# ICE RTD — primary live data source
+# ICE RTD — exclusive live data source
 try:
     import ice_rtd_reader as _ice_rtd_reader
 except ImportError:
     _ice_rtd_reader = None
-
-# Bloomberg RTD — kept as inactive backup; not called unless ICE RTD is unavailable
-try:
-    import rtd_reader as _rtd_reader
-except ImportError:
-    _rtd_reader = None
 
 server = Flask(__name__)
 
@@ -35,12 +29,41 @@ FUTURES_MONTH_FROM_SUFFIX = {v: k for k, v in FUTURES_MONTH_SUFFIX.items()}
 CT_STANDARD_MONTHS = (3, 5, 7, 12)
 CT_EXCLUDED_MONTHS = {10}   # October options are illiquid; omit from all displays
 
+# ICE Cotton No. 2 closed dates — settlement fetch must not write rows on these days
+# (holiday rows carry forward prior session's settle prices with today's date, breaking
+#  the T used to back-calculate settlement IV in the straddle vol-change calc)
+# 2026 source: ICE Futures US Trading Holiday Calendar (uploaded by user 2026-05-23)
+# 2027 calendar expected June 2026 — add entries below when received
+_ICE_CT_CLOSED = {
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03',
+    '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07',
+    '2026-11-26', '2026-12-25', '2027-01-01',
+    # 2027 entries to be added when ICE releases the 2027 calendar
+}
+
+def _is_ct_trading_day(date_str: str) -> bool:
+    """False on weekends and ICE Cotton holidays."""
+    try:
+        d = datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+        return False
+    return d.weekday() < 5 and date_str not in _ICE_CT_CLOSED
+
 _cache = {}
 CACHE_TTL = 60
+_ld_cache    = {}   # load_data() result cache — keyed by commodity
+LD_CACHE_TTL = 30   # seconds; also invalidated when CSV files change on disk
 RISK_FREE  = 0.045
 
 LOCAL_OPT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_options_history.csv')
 LOCAL_FUT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_futures_history.csv')
+LOCAL_SPR_HISTORY = os.path.join(os.path.dirname(__file__), 'local_futures_spreads_history.csv')
+
+# Bloomberg shadow backup — GitHub/Bloomberg data written here as failsafe only.
+# Nothing in the pipeline reads these files. Manual reference if settle_watcher fails.
+_BBG_BACKUP_DIR = os.path.join(os.path.dirname(__file__), 'bloomberg_backup')
+_BBG_OPT_BACKUP = os.path.join(_BBG_BACKUP_DIR, 'ct_options_bloomberg.csv')
+_BBG_FUT_BACKUP = os.path.join(_BBG_BACKUP_DIR, 'ct_futures_bloomberg.csv')
 LOCAL_KC_OPT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_kc_options_history.csv')
 LOCAL_KC_FUT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_kc_futures_history.csv')
 LOCAL_SB_OPT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_sb_options_history.csv')
@@ -50,9 +73,8 @@ LOCAL_CC_FUT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_cc_futures
 
 _skew_hist_cache = {}   # keyed by commodity
 
-# ICE Cotton No. 2 option last-trading-day dates sourced from Bloomberg (OMON <Go>).
-# RTD 'all options' sheet will override these when Excel is live; this dict is the
-# authoritative fallback so DTE is never wrong when RTD is unavailable.
+# ICE Cotton No. 2 option last-trading-day dates — sourced from ICE rulebook and exchange calendar.
+# These are the authoritative expiry dates; the ICE RTD workbook may add new contracts at runtime.
 ICE_CT_EXPIRY = {
     # 2026
     'CTN6': '2026-06-12',
@@ -82,12 +104,40 @@ ICE_CT_EXPIRY = {
     'CTU8': '2028-08-18',
 }
 
+# ICE Coffee C option last-trading-day dates — source: ice.com/products/14/Coffee-C-Options/expiry
+ICE_KC_EXPIRY = {
+    'KCN6': '2026-06-12', 'KCQ6': '2026-07-10', 'KCU6': '2026-08-14',
+    'KCZ6': '2026-11-12',
+    'KCH7': '2027-02-10', 'KCK7': '2027-04-09', 'KCN7': '2027-06-11',
+    'KCU7': '2027-08-13', 'KCZ7': '2027-11-12',
+    'KCH8': '2028-02-11',
+}
+
+# ICE Sugar No. 11 option last-trading-day dates — source: ice.com/products/22/Sugar-No-11-Options/expiry
+ICE_SB_EXPIRY = {
+    'SBN6': '2026-06-15', 'SBQ6': '2026-07-15', 'SBU6': '2026-08-17',
+    'SBV6': '2026-09-15',
+    'SBF7': '2026-12-15', 'SBH7': '2027-02-16', 'SBK7': '2027-04-15',
+    'SBN7': '2027-06-15', 'SBV7': '2027-09-15',
+    'SBF8': '2027-12-15', 'SBH8': '2028-02-15', 'SBK8': '2028-04-17',
+    'SBN8': '2028-06-15', 'SBV8': '2028-09-15',
+}
+
+# ICE Cocoa option last-trading-day dates — source: ice.com/products/8/Cocoa-Options/expiry
+ICE_CC_EXPIRY = {
+    'CCN6': '2026-06-12', 'CCQ6': '2026-07-10', 'CCU6': '2026-08-14',
+    'CCZ6': '2026-11-13',
+    'CCH7': '2027-02-12', 'CCK7': '2027-04-09', 'CCN7': '2027-06-11',
+    'CCU7': '2027-08-13', 'CCZ7': '2027-11-12',
+}
+
+
 COMMODITY_CONFIG = {
     'CT': {
         'prefix': 'CT', 'name': 'ICE Cotton No. 2',
         'opt_csv': LOCAL_OPT_HISTORY, 'fut_csv': LOCAL_FUT_HISTORY,
         'std_months': frozenset({3, 5, 7, 12}), 'excl_months': frozenset({10}),
-        'serial_map': {1:3, 2:3, 4:5, 6:7, 8:12, 9:12, 11:12},
+        'serial_map': {1:3, 2:3, 9:12, 11:12},
         'expiry_override': ICE_CT_EXPIRY,
     },
     'KC': {
@@ -95,21 +145,21 @@ COMMODITY_CONFIG = {
         'opt_csv': LOCAL_KC_OPT_HISTORY, 'fut_csv': LOCAL_KC_FUT_HISTORY,
         'std_months': frozenset({3, 5, 7, 9, 12}), 'excl_months': frozenset(),
         'serial_map': {8: 9},
-        'expiry_override': {},
+        'expiry_override': ICE_KC_EXPIRY,
     },
     'SB': {
         'prefix': 'SB', 'name': 'ICE Sugar No. 11',
         'opt_csv': LOCAL_SB_OPT_HISTORY, 'fut_csv': LOCAL_SB_FUT_HISTORY,
         'std_months': frozenset({3, 5, 7, 10}), 'excl_months': frozenset(),
         'serial_map': {1:3, 8:10, 9:10},
-        'expiry_override': {},
+        'expiry_override': ICE_SB_EXPIRY,
     },
     'CC': {
         'prefix': 'CC', 'name': 'ICE Cocoa',
         'opt_csv': LOCAL_CC_OPT_HISTORY, 'fut_csv': LOCAL_CC_FUT_HISTORY,
         'std_months': frozenset({3, 5, 7, 9, 12}), 'excl_months': frozenset(),
         'serial_map': {8: 9},
-        'expiry_override': {},
+        'expiry_override': ICE_CC_EXPIRY,
     },
 }
 
@@ -270,6 +320,15 @@ def parse_security_des(sec_des, fallback_strike=None):
         pass
     return None
 
+def _decade_year(year_digit):
+    """Convert single-digit year to full year, safe through 2039."""
+    now_yr = datetime.now().year
+    decade = (now_yr // 10) * 10
+    year = decade + year_digit
+    if year < now_yr - 5:
+        year += 10
+    return year
+
 def parse_ct_ticker(ticker):
     """'CTN6' -> (month_code='N', year=2026, month_num=7) or None"""
     if not ticker or len(ticker) < 4 or not ticker.startswith('CT'):
@@ -281,7 +340,7 @@ def parse_ct_ticker(ticker):
         year_digit = int(ticker[3])
     except ValueError:
         return None
-    return code, 2020 + year_digit, MONTH_CODE[code]
+    return code, _decade_year(year_digit), MONTH_CODE[code]
 
 def parse_futures_my(contract, date_s):
     """
@@ -309,13 +368,24 @@ def parse_futures_my(contract, date_s):
     return month_num, first_year + (ordinal - 1)
 
 
-# Explicit anchor for CT serial month options -> underlying standard futures month
+def _generic_to_ice_code(contract, date_str):
+    """'CTJUL1', '2026-06-02' -> 'CTN6'  (old ordinal format -> ICE RTD code)."""
+    parsed = parse_futures_my(contract, date_str)
+    if not parsed:
+        return None
+    month_num, year = parsed
+    _inv = {v: k for k, v in MONTH_CODE.items()}
+    mc = _inv.get(month_num)
+    if not mc:
+        return None
+    return f"{contract[:2]}{mc}{str(year)[-1]}"
+
+
+# CT serial option months and their underlying standard futures month.
+# Cotton only has 4 serial option months — no Apr, Jun, or Aug serials exist.
 CT_SERIAL_FUTURES = {
-    1: 3,   # Jan -> Mar
-    2: 3,   # Feb -> Mar
-    4: 5,   # Apr -> May
-    6: 7,   # Jun -> Jul
-    8: 12,  # Aug -> Dec (Oct excluded as illiquid)
+    1:  3,  # Jan -> Mar
+    2:  3,  # Feb -> Mar
     9: 12,  # Sep -> Dec
     11: 12, # Nov -> Dec
 }
@@ -365,7 +435,7 @@ def parse_generic_ticker(ticker, prefix):
         year_digit = int(ticker[plen + 1])
     except (ValueError, IndexError):
         return None
-    return code, 2020 + year_digit, MONTH_CODE[code]
+    return code, _decade_year(year_digit), MONTH_CODE[code]
 
 
 def parse_futures_my_generic(contract, date_s, prefix):
@@ -390,24 +460,31 @@ def parse_futures_my_generic(contract, date_s, prefix):
     return month_num, first_year + (ordinal - 1)
 
 
+def _nth_friday_of_month(month, year, n=2):
+    """Return the nth Friday of the given month/year."""
+    d = datetime(year, month, 1)
+    days_to_friday = (4 - d.weekday()) % 7
+    return d + timedelta(days=days_to_friday + (n - 1) * 7)
+
 def _kc_opt_expiry(month_num, year):
-    """KC options expire 8 biz days before first biz day of delivery month."""
-    d = datetime(year, month_num, 1)
+    """KC/CC options expire on 2nd Friday of month preceding delivery month."""
+    prev_month = month_num - 1 or 12
+    prev_year  = year if month_num > 1 else year - 1
+    return _nth_friday_of_month(prev_month, prev_year, 2).strftime('%Y-%m-%d')
+
+def _cc_opt_expiry(month_num, year):
+    """CC options expire on 2nd Friday of month preceding delivery month."""
+    return _kc_opt_expiry(month_num, year)
+
+def _sb_opt_expiry(month_num, year):
+    """SB options expire on 15th of month preceding delivery month, next BD if weekend."""
+    prev_month = month_num - 1 or 12
+    prev_year  = year if month_num > 1 else year - 1
+    d = datetime(prev_year, prev_month, 15)
     while d.weekday() >= 5:
         d += timedelta(days=1)
-    count = 0
-    while count < 8:
-        d -= timedelta(days=1)
-        if d.weekday() < 5:
-            count += 1
     return d.strftime('%Y-%m-%d')
 
-
-# ── Daily settle fetch schedule ───────────────────────────────────────────────
-# Fires at SETTLE_FETCH_HOUR:SETTLE_FETCH_MINUTE local machine time.
-# Set to local equivalent of 15:45 ET (e.g. 20:45 for UK BST, 15:45 for US ET).
-SETTLE_FETCH_HOUR   = 20
-SETTLE_FETCH_MINUTE = 45
 
 # ── ICE RTD adapter ───────────────────────────────────────────────────────────
 
@@ -432,12 +509,20 @@ def _ice_to_rtd_shape(ice_data):
         else:
             last = f.get('last') or f.get('settle')
         outrights[tkr] = {
-            'last':    last,
-            'settle':  f.get('settle'),
-            'change':  None, 'pct_chg': None,
-            'oi':      f.get('oi'), 'oi_chg': None,
-            'volume':  None, 'high': None, 'low': None,
-            'hv10':    None, 'hv30': None, 'hv60': None, 'hv90': None,
+            'last':        last,
+            'settle':      f.get('settle'),
+            'yest_settle': f.get('yest_settle'),
+            'change':      f.get('change'),
+            'pct_chg':     f.get('pct_chg'),
+            'oi':          f.get('oi'),
+            'oi_chg':      None,
+            'volume':      f.get('volume'),
+            'high':        f.get('high'),
+            'low':         f.get('low'),
+            'block_vol':   f.get('block_vol'),
+            'efs_vol':     f.get('efs_vol'),
+            'efp_vol':     f.get('efp_vol'),
+            'hv10':        None, 'hv30': None, 'hv60': None, 'hv90': None,
         }
 
     live_opts = {}
@@ -446,23 +531,24 @@ def _ice_to_rtd_shape(ice_data):
         strikes = []
         for r in rows:
             k = r['strike']
-            for pc, bk, ok, lk in [
-                ('Call', 'call_bid', 'call_offer', 'call_last'),
-                ('Put',  'put_bid',  'put_offer',  'put_last'),
+            for pc, bk, ok, lk, sk in [
+                ('Call', 'call_bid', 'call_offer', 'call_last', 'call_settle'),
+                ('Put',  'put_bid',  'put_offer',  'put_last',  'put_settle'),
             ]:
-                bid  = r.get(bk)
-                ask  = r.get(ok)
-                last = r.get(lk)
+                bid    = r.get(bk)
+                ask    = r.get(ok)
+                last   = r.get(lk)
+                settle = r.get(sk)
                 mid  = (bid + ask) / 2.0 if (bid and ask and bid > 0 and ask > 0) else last
                 strikes.append({'strike': k, 'pc': pc,
                                 'bid': bid, 'ask': ask, 'mid': mid,
-                                'last': last, 'vol': None})
+                                'last': last, 'settle': settle, 'vol': None})
         if strikes:
             live_opts[ticker] = {'expiry': None, 'strikes': strikes}
 
     return {
         'outrights':    outrights,
-        'spreads':      {},
+        'spreads':      ice_data.get('spreads', {}),
         'live_options': live_opts,
         'source':       f'ice_rtd_{mode}',
     }
@@ -470,9 +556,39 @@ def _ice_to_rtd_shape(ice_data):
 
 # ── Core data load ────────────────────────────────────────────────────────────
 
+def _in_ct_settle_window():
+    """True during 14:25–16:00 ET on a CT trading day.
+    settle_watcher.py owns the ICE COM interface exclusively in this window.
+    The dashboard must not call read_ice_workbook() during this period."""
+    try:
+        try:
+            from zoneinfo import ZoneInfo as _ZI
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo as _ZI
+        _now = datetime.now(_ZI('America/New_York'))
+        return (_is_ct_trading_day(_now.strftime('%Y-%m-%d'))
+                and (14, 25) <= (_now.hour, _now.minute) <= (16, 0))
+    except Exception:
+        return False
+
+
 def load_data(commodity='CT'):
     if commodity != 'CT':
         return _load_generic_data(commodity)
+
+    # ── Result cache — invalidated on CSV file changes or after LD_CACHE_TTL ──
+    try:
+        _om = os.path.getmtime(LOCAL_OPT_HISTORY)
+        _fm = os.path.getmtime(LOCAL_FUT_HISTORY)
+    except OSError:
+        _om = _fm = 0
+    _now = time.time()
+    _cached = _ld_cache.get('CT')
+    if (_cached
+            and _now - _cached['ts'] < LD_CACHE_TTL
+            and _cached.get('om') == _om
+            and _cached.get('fm') == _fm):
+        return _cached['data']
 
     try:
         opt_rows = read_local_csv(LOCAL_OPT_HISTORY)
@@ -480,18 +596,14 @@ def load_data(commodity='CT'):
     except Exception as e:
         return {'error': str(e)}
 
-    # Live data overlay — ICE RTD primary, Bloomberg RTD backup (inactive unless ICE unavailable)
+    # Live data — ICE RTD exclusive source.
+    # Blocked during 14:25–16:00 ET: settle_watcher owns the COM interface then.
     rtd = None
-    if _ice_rtd_reader:
+    if _ice_rtd_reader and not _in_ct_settle_window():
         try:
             rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook('CT'))
         except Exception as e:
             log.debug('ICE RTD fetch skipped: %s', e)
-    if rtd is None and _rtd_reader:
-        try:
-            rtd = _rtd_reader.read_live()
-        except Exception as e:
-            log.debug('Bloomberg RTD fallback skipped: %s', e)
 
     # Parse every CT options row upfront — extract ticker, pc, strike from security_des
     ct_opts = []
@@ -503,8 +615,8 @@ def load_data(commodity='CT'):
             continue
         try:
             px  = float(r.get('px_settle', 0) or 0)
-            oi  = int(r.get('open_int', 0) or 0)
-            oic = int(r.get('oi_chg', 0) or 0)
+            oi  = int(float(r.get('open_int', 0) or 0))
+            oic = int(float(r.get('oi_chg', 0) or 0))
             vol = float(r.get('px_volume', 0) or 0)
         except (ValueError, TypeError):
             continue
@@ -535,6 +647,72 @@ def load_data(commodity='CT'):
         (d for d in all_dates if datetime.strptime(d, '%Y-%m-%d') <= week_target),
         default=prev_date
     )
+
+    # flow_rtd.json — written at futures settlement time (before options settle),
+    # holds yesterday's ICE call_settle/put_settle for every contract/strike.
+    # Used as prev_c/prev_p when post-settlement (RTD has flipped to today's values).
+    # Try today's date first: today's file has yesterday's settle prices (written at
+    # futures settlement before options settled). Fall back to last_date if not found.
+    _flow_rtd_opts = {}
+    try:
+        import json as _json
+        _today_for_rtd = datetime.now().strftime('%Y-%m-%d')
+        _flow_rtd_path = None
+        for _rtd_date in (_today_for_rtd, last_date):
+            _candidate = os.path.normpath(os.path.join(
+                os.path.dirname(__file__), '..', 'Options_flow_analyzer',
+                'data', _rtd_date, 'flow_rtd.json'
+            ))
+            if os.path.exists(_candidate):
+                _flow_rtd_path = _candidate
+                break
+        if _flow_rtd_path:
+            _frd = _json.load(open(_flow_rtd_path, encoding='utf-8'))
+            for _tkr, _cdata in (_frd.get('contracts') or {}).items():
+                for _row in (_cdata.get('options') or []):
+                    _k = int(float(_row.get('strike', 0)))
+                    _cs = _row.get('call_settle')
+                    _ps = _row.get('put_settle')
+                    if _cs and _ps and _cs > 0 and _ps > 0:
+                        _flow_rtd_opts[(_tkr, _k)] = (_cs, _ps)
+            log.debug('flow_rtd.json loaded: %d option rows', len(_flow_rtd_opts))
+    except Exception as _e:
+        log.debug('flow_rtd.json load skipped: %s', _e)
+
+    # CSV option settle lookup — today's settled prices from local_options_history.csv.
+    # Used when RTD is offline post-settlement so straddle values don't go blank.
+    # Format: {(ticker, strike_int): {'C': call_settle, 'P': put_settle}}
+    # Two security_des formats exist:
+    #   settle_watcher: 'CTN6P    75' (embedded strike) + separate strike_px column
+    #   _persist_ct_options_ice: 'CTN6P' (short) + separate strike_px column
+    # Always use strike_px as primary; fall back to embedded parsing when absent.
+    _csv_opt_settle = {}
+    try:
+        for _r in read_local_csv(LOCAL_OPT_HISTORY):
+            if _r.get('date', '').strip() != last_date:
+                continue
+            _sd = _r.get('security_des', '').strip()
+            _px = _r.get('px_settle', '').strip()
+            if not _sd or not _px or len(_sd) < 5 or _sd[4] not in ('C', 'P'):
+                continue
+            try:
+                _px_f = float(_px)
+                if _px_f <= 0:
+                    continue
+                _t = _sd[:4]
+                _pc = _sd[4]
+                _strike_raw = _r.get('strike_px', '').strip()
+                if _strike_raw:
+                    _k = int(float(_strike_raw))
+                elif len(_sd) >= 6:
+                    _k = int(float(_sd[5:].strip()))
+                else:
+                    continue
+                _csv_opt_settle.setdefault((_t, _k), {})[_pc] = _px_f
+            except (ValueError, TypeError):
+                continue
+    except Exception as _e:
+        log.debug('csv_opt_settle load skipped: %s', _e)
 
     # generic_settle['CTJUL1']['2025-01-03'] = 69.89  — every row, no filtering
     generic_settle = {}
@@ -587,6 +765,114 @@ def load_data(commodity='CT'):
                 'first_notice': fn_str or None,
                 'date':         date_s,
             }
+
+    # Previous-trading-day settlement from CSV — needed to fix yest_settle in live_futures.
+    # RTD 'Change' column is last-trade based (last_trade − S_{t-1}), not settle-to-settle,
+    # so yest_settle = rtd_settle − rtd_change gives the wrong value.
+    csv_prev_settle = {}
+    for row in ct_fut:
+        if (row.get('date') or '').strip() != prev_date:
+            continue
+        contract = (row.get('contract') or '').strip()
+        settle_s = (row.get('settle')   or '').strip()
+        date_s   = (row.get('date')     or '').strip()
+        if not contract or not settle_s:
+            continue
+        lt_str = (row.get('last_trade') or '').strip()
+        key = None
+        if lt_str:
+            try:
+                lt_dt = datetime.strptime(lt_str, '%Y-%m-%d')
+                key = (lt_dt.month, lt_dt.year)
+            except ValueError:
+                pass
+        if key is None:
+            result = parse_futures_my(contract, date_s)
+            if result:
+                key = result
+        if key is None:
+            continue
+        try:
+            settle_f = float(settle_s)
+        except (ValueError, TypeError):
+            continue
+        csv_prev_settle[key] = settle_f
+
+    # Futures-CSV-based prior settle — uses fut_prev (futures CSV second-most-recent date).
+    # Needed for post_settle detection which must use futures CSV date, not options CSV date.
+    # Built after fut_dates/fut_prev are computed further below; populated in a second pass.
+    csv_fut_prev_settle = {}   # populated after _build_csv_oi section below
+
+    # Yesterday's OI from CSV — used to compute OI chg against RTD live OI.
+    # The CSV oi_chg field is always blank; compute it as rtd_oi - csv_prev_oi instead.
+    # Use same date logic as yest_settle: prev_date when post-settle, last_date otherwise.
+    def _build_csv_oi(target_date):
+        result = {}
+        for row in ct_fut:
+            if (row.get('date') or '').strip() != target_date:
+                continue
+            contract = (row.get('contract') or '').strip()
+            oi_s     = (row.get('open_int') or '').strip()
+            date_s   = (row.get('date')     or '').strip()
+            if not contract or not oi_s:
+                continue
+            lt_str = (row.get('last_trade') or '').strip()
+            key = None
+            if lt_str:
+                try:
+                    lt_dt = datetime.strptime(lt_str, '%Y-%m-%d')
+                    key = (lt_dt.month, lt_dt.year)
+                except ValueError:
+                    pass
+            if key is None:
+                r2 = parse_futures_my(contract, date_s)
+                if r2:
+                    key = r2
+            if key is None:
+                continue
+            try:
+                result[key] = float(oi_s)
+            except (ValueError, TypeError):
+                continue
+        return result
+    # Futures CSV has its own date sequence — may lag behind options CSV.
+    # Derive dates from ct_fut directly so we always find OI rows.
+    fut_dates   = sorted(set(r.get('date','').strip() for r in ct_fut if r.get('date','').strip()))
+    fut_last    = fut_dates[-1]  if fut_dates            else last_date
+    fut_prev    = fut_dates[-2]  if len(fut_dates) >= 2  else fut_last
+    csv_last_oi = _build_csv_oi(fut_last)
+    csv_prev_oi = _build_csv_oi(fut_prev)
+
+    # Populate csv_fut_prev_settle now that fut_prev is known.
+    # Uses futures CSV second-most-recent date so post_settle yest_settle
+    # always resolves to the actual prior trading session, independent of
+    # whether the options CSV has caught up yet.
+    for row in ct_fut:
+        if (row.get('date') or '').strip() != fut_prev:
+            continue
+        contract = (row.get('contract') or '').strip()
+        settle_s = (row.get('settle')   or '').strip()
+        date_s   = (row.get('date')     or '').strip()
+        if not contract or not settle_s:
+            continue
+        lt_str = (row.get('last_trade') or '').strip()
+        key = None
+        if lt_str:
+            try:
+                lt_dt = datetime.strptime(lt_str, '%Y-%m-%d')
+                key = (lt_dt.month, lt_dt.year)
+            except ValueError:
+                pass
+        if key is None:
+            r2 = parse_futures_my(contract, date_s)
+            if r2:
+                key = r2
+        if key is None:
+            continue
+        try:
+            csv_fut_prev_settle[key] = float(settle_s)
+        except (ValueError, TypeError):
+            continue
 
     # Active expiries from today's data (base tickers: CTN6, CTZ6 etc.)
     today_opts = [r for r in ct_opts if r['date'] == last_date]
@@ -775,7 +1061,8 @@ def load_data(commodity='CT'):
                         return iv
         return None
 
-    # ── ATM IV today / prev / week ────────────────────────────────────────────
+    # ── ATM IV today / week ───────────────────────────────────────────────────
+    # 1D change is computed in the straddle loop (live IV − settlement IV via B76).
     atm_iv        = {}
     atm_iv_1d_chg = {}
     atm_iv_1w_chg = {}
@@ -785,30 +1072,9 @@ def load_data(commodity='CT'):
         if iv_t is None:
             continue
         atm_iv[ticker] = round(iv_t * 100, 2)
-        iv_p = atm_iv_for_date(ticker, prev_date, prev_futures.get(ticker))
-        if iv_p is not None:
-            atm_iv_1d_chg[ticker] = round((iv_t - iv_p) * 100, 2)
         iv_w = atm_iv_for_date(ticker, week_date, week_futures.get(ticker))
         if iv_w is not None:
             atm_iv_1w_chg[ticker] = round((iv_t - iv_w) * 100, 2)
-
-    # RTD straddles sheet override — use Bloomberg's live ATM vol directly.
-    # Bloomberg computes and displays atm_vol live on the Cotton Straddles RTD sheet.
-    # This is more reliable than the settle-based atm_iv_for_date() and provides
-    # live data even when the bid/ask straddle computation below cannot run.
-    # The live smile bid/ask computation (line ~888) may further refine this value.
-    if rtd:
-        for tkr, d in (rtd.get('options') or {}).items():
-            if tkr not in expiry_list:
-                continue
-            vol_rtd = d.get('atm_vol_rtd')
-            if vol_rtd and vol_rtd > 0:
-                # Bloomberg reports ATM vol as a percentage (e.g. 24.4 for 24.4%);
-                # guard against decimal form (< 1) just in case.
-                atm_iv[tkr] = round(vol_rtd if vol_rtd > 1 else vol_rtd * 100, 2)
-
-    # ATM IV comes entirely from CSV settle + Bloomberg expiry DTE (computed above).
-    # The "all options" live sheet feeds the smile chart only — it does not override ATM IV.
 
     # ── IV Percentile ─────────────────────────────────────────────────────────
     # Uses per-date historical forward (from generic_settle) + per-date ATM strike
@@ -947,16 +1213,134 @@ def load_data(commodity='CT'):
     live_futures = {}
     rtd_spreads  = {}
     data_source  = 'csv_only'
+    today_str    = datetime.now().strftime('%Y-%m-%d')
+    post_settle  = (fut_last == today_str)
 
     if rtd:
         data_source = rtd.get('source', 'csv_only')
         for tkr, d in (rtd.get('outrights') or {}).items():
             hv_data[tkr]      = {k: d.get(k) for k in ('hv10', 'hv30', 'hv60', 'hv90')}
-            live_futures[tkr] = {k: d.get(k) for k in
-                                 ('last', 'settle', 'change', 'pct_chg',
-                                  'oi', 'oi_chg', 'volume', 'high', 'low')}
-        rtd_spreads = {tkr: {k: d.get(k) for k in ('settle', 'change', 'legs')}
-                       for tkr, d in (rtd.get('spreads') or {}).items()}
+            live_futures[tkr] = {k: d.get(k) for k in (
+                'last', 'settle', 'yest_settle', 'change', 'pct_chg',
+                'oi', 'oi_chg', 'volume', 'high', 'low',
+                'block_vol', 'efs_vol', 'efp_vol',
+            )}
+        rtd_spreads = {key: d for key, d in (rtd.get('spreads') or {}).items()}
+
+        # Fix yest_settle for outrights and spreads.
+        #
+        # Pre-settlement: RTD 'settle' col is static = yesterday's settlement.
+        #   Use it directly — always correct before ICE publishes today's.
+        #
+        # Post-settlement: futures CSV (written by settle_watcher) has today's
+        #   row with yest_settle stored correctly from the 14:18 snapshot.
+        #   Read it directly — no derived computation needed.
+
+        # Build yest_settle lookup from today's futures CSV rows when available
+        csv_today_yest = {}
+        if post_settle:
+            for row in ct_fut:
+                if (row.get('date') or '').strip() != fut_last:
+                    continue
+                c = (row.get('contract') or '').strip()
+                ys = (row.get('yest_settle') or '').strip()
+                if not c or not ys:
+                    continue
+                p = parse_ct_ticker(c)
+                if p:
+                    try:
+                        csv_today_yest[(p[2], p[1])] = float(ys)
+                    except (ValueError, TypeError):
+                        pass
+
+        for tkr, d in live_futures.items():
+            parsed = parse_ct_ticker(tkr)
+            if not parsed:
+                continue
+            _, yr, mn = parsed
+            if post_settle:
+                yest = csv_today_yest.get((mn, yr))
+            else:
+                # RTD settle = yesterday's published settlement (static all day)
+                yest = d.get('settle')
+            if yest is not None:
+                d['yest_settle'] = round(yest, 4)
+                chg_base = d.get('last') if d.get('last') is not None else d.get('settle')
+                if chg_base is not None:
+                    chg = round(chg_base - yest, 4)
+                    d['change'] = chg
+                    d['pct_chg'] = round(chg / yest * 100, 4) if yest else None
+            # OI chg = RTD live OI − yesterday's CSV OI
+            yest_oi_src = csv_prev_oi if post_settle else csv_last_oi
+            yest_oi = yest_oi_src.get((mn, yr))
+            live_oi = d.get('oi')
+            if live_oi is not None and yest_oi is not None:
+                d['oi_chg'] = round(live_oi - yest_oi)
+
+        for skey, sd in rtd_spreads.items():
+            parts = skey.split('/')
+            if len(parts) != 2:
+                continue
+            pn = parse_ct_ticker(parts[0])
+            pf = parse_ct_ticker(parts[1])
+            if not pn or not pf:
+                continue
+            if post_settle:
+                yn = csv_prev_settle.get((pn[2], pn[1]))
+                yf = csv_prev_settle.get((pf[2], pf[1]))
+            else:
+                yn = (live_futures.get(parts[0]) or {}).get('settle')
+                yf = (live_futures.get(parts[1]) or {}).get('settle')
+            if yn is not None and yf is not None and sd.get('settle') is not None:
+                yest_spr = round(yn - yf, 4)
+                sd['yest_settle'] = yest_spr
+                chg_base_spr = sd.get('last') if sd.get('last') is not None else sd.get('settle')
+                if chg_base_spr is not None:
+                    chg_spr = round(chg_base_spr - yest_spr, 4)
+                    sd['change'] = chg_spr
+                    sd['pct_chg'] = round(chg_spr / yest_spr * 100, 4) if yest_spr else None
+
+    # ── CSV fallback for futures fields when RTD is offline post-settlement ──────
+    # settle_watcher writes settle, high, low, volume, efp, efs, block, OI, OI_chg
+    # to local_futures_history.csv at ~14:45 ET. When RTD is unavailable after
+    # close, fill any None/missing live_futures fields from that CSV row so the
+    # EOD email always has complete data regardless of workbook state.
+    _today_str_fb = datetime.now().strftime('%Y-%m-%d')
+    if fut_last == _today_str_fb:
+        def _fv(v):
+            try: return float(v) if v not in (None, '') else None
+            except (ValueError, TypeError): return None
+        for _row in ct_fut:
+            if (_row.get('date') or '').strip() != fut_last:
+                continue
+            _tkr_raw = (_row.get('contract') or '').strip()
+            if not _tkr_raw:
+                continue
+            # Translate old-format key (CTJUL1) to ICE code (CTN6) so live_futures
+            # is always keyed consistently regardless of whether RTD was available.
+            _tkr = _generic_to_ice_code(_tkr_raw, fut_last) or _tkr_raw
+            if _tkr not in live_futures:
+                live_futures[_tkr] = {}
+            _lf = live_futures[_tkr]
+            for _csv_key, _lf_key in [
+                ('settle',    'settle'),
+                ('yest_settle','yest_settle'),
+                ('high',      'high'),
+                ('low',       'low'),
+                ('volume',    'volume'),
+                ('efp_vol',   'efp_vol'),
+                ('efs_vol',   'efs_vol'),
+                ('block_vol', 'block_vol'),
+                ('open_int',  'oi'),
+                ('oi_chg',    'oi_chg'),
+            ]:
+                if _lf.get(_lf_key) is None:
+                    _lf[_lf_key] = _fv(_row.get(_csv_key))
+            # compute change/pct_chg if RTD didn't supply them
+            _s, _y = _lf.get('settle'), _lf.get('yest_settle')
+            if _lf.get('change') is None and _s is not None and _y is not None and _y:
+                _lf['change']  = round(_s - _y, 4)
+                _lf['pct_chg'] = round((_s - _y) / _y * 100, 4)
 
     # ── Live smile from Bloomberg 'all options' sheet ─────────────────────────
     # Parity forward derived from live mid prices — consistent with every strike.
@@ -969,7 +1353,7 @@ def load_data(commodity='CT'):
             lo = live_opts_map.get(ticker)
             if not lo or not lo.get('strikes'):
                 continue
-            dte = get_dte(ticker, last_date)
+            dte = get_dte(ticker, datetime.now().strftime('%Y-%m-%d'))
             if dte <= 0:
                 continue
             T = dte / 365.0
@@ -1076,75 +1460,286 @@ def load_data(commodity='CT'):
                     live_iv = implied_vol(call_eq, live_F, live_atm, T, RISK_FREE, True)
                     if live_iv and 0.05 < live_iv < 1.50:
                         atm_iv[ticker] = round(live_iv * 100, 2)
-                        iv_p = atm_iv_for_date(ticker, prev_date, prev_futures.get(ticker))
-                        if iv_p is not None:
-                            atm_iv_1d_chg[ticker] = round(live_iv * 100 - iv_p * 100, 2)
                         iv_w = atm_iv_for_date(ticker, week_date, week_futures.get(ticker))
                         if iv_w is not None:
                             atm_iv_1w_chg[ticker] = round(live_iv * 100 - iv_w * 100, 2)
 
-    # RTD straddles sheet — Bloomberg streaming ATM vol overrides stale BQL value.
-    # The straddles sheet uses "Dec26"/"Jul26" keys; map to "CTZ6"/"CTN6" etc.
-    _STRAD_MONTH = {
-        'Jan': 'F', 'Feb': 'G', 'Mar': 'H', 'Apr': 'J', 'May': 'K', 'Jun': 'M',
-        'Jul': 'N', 'Aug': 'Q', 'Sep': 'U', 'Oct': 'V', 'Nov': 'X', 'Dec': 'Z',
-    }
-    if rtd:
-        for code, sd in (rtd.get('straddles') or {}).items():
-            mo, yr = code[:3], code[3:]
-            mc = _STRAD_MONTH.get(mo)
-            if not mc or not yr.isdigit():
-                continue
-            tkr = 'CT' + mc + yr[-1]
-            if tkr not in expiry_list:
-                continue
-            vol = sd.get('atm_vol')
-            if vol and vol > 0:
-                atm_iv[tkr] = round(vol * 100 if vol < 1 else vol, 2)
-
     # ── HV from local futures history (replaces Bloomberg RTD HV) ────────────
     csv_hv = _compute_hv(LOCAL_FUT_HISTORY, 'CT')
-    if csv_hv:
-        for tkr in expiry_list:
-            hv_data.setdefault(tkr, {}).update(csv_hv)
+    for tkr in expiry_list:
+        if tkr in csv_hv:
+            hv_data.setdefault(tkr, {}).update(csv_hv[tkr])
 
     # ── Straddle run (Jul–Dec 2026 only) ─────────────────────────────────────
-    straddles = []
-    for ticker in expiry_list:
-        my = _contract_code_to_month_year(ticker, 'CT')
-        if not my or my[1] != 2026:   # 2026 delivery only
-            continue
-        fwd    = futures.get(ticker)
-        atm    = atm_strike.get(ticker)
-        lt     = last_trade.get(ticker)
-        label  = expiry_labels.get(ticker)
-        iv_pct = atm_iv.get(ticker)
-        if not all([fwd, atm, lt, iv_pct]):
-            continue
+    # Read settle prices directly from ICE RTD workbook when available.
+    # Blocked during 14:25–16:00 ET: settle_watcher owns the COM interface then.
+    # Straddle loop falls back to _flow_rtd_opts / B76 when _ice_raw is None.
+    _ice_raw = None
+    if _ice_rtd_reader and not _in_ct_settle_window():
         try:
-            dte = max(0, (datetime.strptime(lt, '%Y-%m-%d') -
-                          datetime.strptime(last_date, '%Y-%m-%d')).days)
+            _ice_raw = _ice_rtd_reader.read_ice_workbook('CT')
+            if _ice_raw and _ice_raw.get('mode') == 'unavailable':
+                _ice_raw = None
+        except Exception:
+            _ice_raw = None
+
+    # Supplement straddle list with any contracts in the live workbook not yet in the CSV
+    straddle_tickers = list(expiry_list)
+    if _ice_raw:
+        for sheet_name in (_ice_raw.get('options') or {}):
+            t = sheet_name.upper()
+            if t in straddle_tickers:
+                continue
+            p = parse_ct_ticker(t)
+            if not p or p[2] in CT_EXCLUDED_MONTHS:
+                continue
+            straddle_tickers.append(t)
+            expiry_labels[t] = ticker_label(t)
+            if t in ICE_CT_EXPIRY:
+                last_trade[t] = ICE_CT_EXPIRY[t]
+            else:
+                _, yr, mo = p
+                last_trade[t] = option_expiry_date(mo, yr)
+            ice_f = (_ice_raw.get('futures') or {}).get(t, {})
+            if ice_f.get('settle'):
+                futures[t] = ice_f['settle']
+
+    # Sep27 and Nov27 excluded until liquidity warrants inclusion
+    straddle_tickers = [t for t in straddle_tickers if t not in {'CTU7', 'CTX7'}]
+
+    # The GitHub options CSV is published one business day late — last_date is the
+    # publication date, not the trading date.  Settlement was actually priced on the
+    # last CT trading session before today.  Use that date for T_settle so the
+    # back-computed settle IV uses the correct DTE.
+    _prev_day = datetime.now() - timedelta(days=1)
+    while not _is_ct_trading_day(_prev_day.strftime('%Y-%m-%d')):
+        _prev_day -= timedelta(days=1)
+    _actual_settle_str = _prev_day.strftime('%Y-%m-%d')
+
+    straddles = []
+    for ticker in straddle_tickers:
+        my = _contract_code_to_month_year(ticker, 'CT')
+        if not my:
+            continue
+        lt    = last_trade.get(ticker)
+        label = expiry_labels.get(ticker)
+        if not lt:
+            continue
+
+        # ── Forward from ICE RTD workbook (exclusive source) ─────────────
+        ice_chain   = (_ice_raw or {}).get('options', {}).get(ticker, [])
+        ice_fut_row = (_ice_raw or {}).get('futures', {}).get(ticker, {})
+
+        # Live forward: bid/offer mid → last → settle
+        _fb, _fo = ice_fut_row.get('bid'), ice_fut_row.get('offer')
+        if _fb and _fo and _fb > 0 and _fo > 0:
+            fwd = (_fb + _fo) / 2.0
+        elif ice_fut_row.get('last') and ice_fut_row['last'] > 0:
+            fwd = ice_fut_row['last']
+        else:
+            fwd = ice_fut_row.get('settle') or futures.get(ticker)
+
+        atm_row = None
+        if fwd and ice_chain:
+            atm = min((r['strike'] for r in ice_chain), key=lambda k: abs(k - fwd))
+            atm_row = next((r for r in ice_chain if r['strike'] == atm), None)
+            if atm_row:
+                _rtd_mode = (_ice_raw or {}).get('mode', 'live')
+                if _rtd_mode != 'live':
+                    # Market closed (prior_settle mode) — call_last is stale,
+                    # call_settle is the authoritative settlement price.
+                    today_c = atm_row.get('call_settle')
+                    today_p = atm_row.get('put_settle')
+                else:
+                    cb, co = atm_row.get('call_bid'), atm_row.get('call_offer')
+                    pb, po = atm_row.get('put_bid'),  atm_row.get('put_offer')
+                    today_c = ((cb + co) / 2.0) if (cb and co and cb > 0 and co > 0) else atm_row.get('call_last')
+                    today_p = ((pb + po) / 2.0) if (pb and po and pb > 0 and po > 0) else atm_row.get('put_last')
+            else:
+                today_c = today_p = None
+        elif fwd:
+            atm = atm_strike.get(ticker)
+            today_c = today_p = None
+        else:
+            fwd = atm = today_c = today_p = None
+
+        if not all([fwd, atm]):
+            continue
+
+        try:
+            _lt_dt   = datetime.strptime(lt, '%Y-%m-%d')
+            dte      = max(0, (_lt_dt - datetime.strptime(datetime.now().strftime('%Y-%m-%d'), '%Y-%m-%d')).days)
+            T        = dte / 365.0
+            T_settle = max(0, (_lt_dt - datetime.strptime(_actual_settle_str, '%Y-%m-%d')).days) / 365.0
         except ValueError:
             continue
         if dte <= 0:
             continue
-        T     = dte / 365.0
-        sigma = iv_pct / 100.0
-        val   = round(b76_price(fwd, atm, T, RISK_FREE, sigma, True) +
-                      b76_price(fwd, atm, T, RISK_FREE, sigma, False), 2)
+        if T_settle <= 0:
+            T_settle = T
 
+        month_num, yr = my
+        if month_num not in CT_STANDARD_MONTHS:
+            # Serial month (Aug/Sep/Nov/Jan/Feb/Apr/Jun): always derive the live straddle
+            # from the underlying standard month's live IV+forward so the value reflects
+            # today's move rather than being frozen at yesterday's settle.
+            std_m, std_y = next_standard_month(month_num, yr)
+            _inv_mc = {v: k for k, v in MONTH_CODE.items()}
+            std_tkr = f"CT{_inv_mc.get(std_m, '')}{str(std_y)[-1:]}"
+            std_iv  = atm_iv.get(std_tkr)
+            std_row = (_ice_raw or {}).get('futures', {}).get(std_tkr, {})
+            _sfb, _sfo = std_row.get('bid'), std_row.get('offer')
+            if _sfb and _sfo and _sfb > 0 and _sfo > 0:
+                std_fwd = (_sfb + _sfo) / 2.0
+            elif std_row.get('last') and std_row['last'] > 0:
+                std_fwd = std_row['last']
+            else:
+                std_fwd = std_row.get('settle') or futures.get(std_tkr)
+            if std_fwd:
+                # ATM rule: fractional ≥ 0.50 → upper strike (ceil), < 0.50 → lower (floor)
+                _frac = std_fwd % 1.0
+                atm = float(math.ceil(std_fwd) if _frac >= 0.50 else math.floor(std_fwd))
+                atm_row = next((r for r in ice_chain if abs(r['strike'] - atm) < 0.01), None)
+                fwd = std_fwd
+                # Use actual live bid/ask at the correct ATM — same source as the header card.
+                # B76 derivation from the standard month vol is only a fallback when no live
+                # market exists for the serial month.
+                _tc = _tp = None
+                if atm_row:
+                    _cb, _co = atm_row.get('call_bid'), atm_row.get('call_offer')
+                    _pb, _po = atm_row.get('put_bid'),  atm_row.get('put_offer')
+                    if _cb and _co and _cb > 0 and _co > 0:
+                        _tc = (_cb + _co) / 2.0
+                    if _pb and _po and _pb > 0 and _po > 0:
+                        _tp = (_pb + _po) / 2.0
+                if _tc and _tp:
+                    val = round(_tc + _tp, 2)
+                elif std_iv:
+                    val = round(b76_price(std_fwd, atm, T, RISK_FREE, std_iv / 100.0, True) +
+                                b76_price(std_fwd, atm, T, RISK_FREE, std_iv / 100.0, False), 2)
+                else:
+                    continue
+            elif today_c is not None and today_p is not None:
+                val = round(today_c + today_p, 2)  # last resort: frozen settle
+            else:
+                continue
+        elif today_c is not None and today_p is not None:
+            val = round(today_c + today_p, 2)
+            # prior_settle mode: call_settle still = yesterday's values until ICE publishes today's.
+            # Between futures and options settlement: override with B76 at today's settled futures.
+            # Once settle_watcher writes options CSV (_csv_opt_settle populated), use CSV prices instead.
+            if _rtd_mode != 'live' and post_settle:
+                if _csv_opt_settle:
+                    _opt_csv = _csv_opt_settle.get((ticker, int(atm)), {})
+                    _tc_csv, _tp_csv = _opt_csv.get('C'), _opt_csv.get('P')
+                    if _tc_csv and _tp_csv:
+                        val = round(_tc_csv + _tp_csv, 2)
+                else:
+                    _fut_today = futures.get(ticker)
+                    _prior_iv_ps = atm_iv.get(ticker)
+                    if _fut_today and _prior_iv_ps and T > 0:
+                        val = round(b76_price(_fut_today, atm, T, RISK_FREE, _prior_iv_ps / 100.0, True) +
+                                    b76_price(_fut_today, atm, T, RISK_FREE, _prior_iv_ps / 100.0, False), 2)
+        else:
+            # No live bid/offer/last from options chain.
+            # B76 theoretical: use whenever fwd + prior IV are available — works
+            # during the settle window (_ice_raw=None) because fwd comes from the
+            # futures CSV (today's settled price) and _prior_iv from yesterday's CSV.
+            # Fall back to CSV settled prices only when B76 inputs are unavailable.
+            _prior_iv = atm_iv.get(ticker)
+            if _prior_iv and fwd and T > 0:
+                val = round(b76_price(fwd, atm, T, RISK_FREE, _prior_iv / 100.0, True) +
+                            b76_price(fwd, atm, T, RISK_FREE, _prior_iv / 100.0, False), 2)
+            elif atm is not None and _csv_opt_settle:
+                _opt = _csv_opt_settle.get((ticker, int(atm)), {})
+                _tc, _tp = _opt.get('C'), _opt.get('P')
+                if _tc and _tp:
+                    val = round(_tc + _tp, 2)
+                else:
+                    continue
+            else:
+                continue  # no prices available
+
+        # Implied vol from the settle straddle (exact, using workbook forward)
+        df_t   = math.exp(-RISK_FREE * T)
+        call_eq = (val + (fwd - atm) * df_t) / 2.0
+        iv_pct = None
+        if call_eq > 0:
+            iv = implied_vol(call_eq, fwd, atm, T, RISK_FREE, True)
+            if iv:
+                iv_pct = round(iv * 100, 2)
+        if iv_pct is None:
+            iv_pct = atm_iv.get(ticker)
+
+        # Settlement straddle = yesterday's published settlement straddle.
+        #
+        # Pre-settlement: RTD call_settle/put_settle = yesterday's values → use directly.
+        # Post-settlement: RTD has flipped to today's values.
+        #   Priority 1: flow_rtd.json (written at futures settlement, before options
+        #               settled) — holds yesterday's ICE call_settle/put_settle exactly.
+        #   Priority 2: CSV prev_date px_settle (Bloomberg approx, fallback only).
         prev_c = prev_p = None
-        for r in ct_opts:
-            if r['date'] == prev_date and r['ticker'] == ticker and abs(r['strike'] - atm) < 0.01:
-                if r['pc'] == 'Call' and r['px'] > 0:
-                    prev_c = r['px']
-                elif r['pc'] == 'Put' and r['px'] > 0:
-                    prev_p = r['px']
+        if not post_settle and atm_row:
+            cs = atm_row.get('call_settle')
+            ps = atm_row.get('put_settle')
+            if cs and cs > 0: prev_c = cs
+            if ps and ps > 0: prev_p = ps
+
+        if (prev_c is None or prev_p is None) and post_settle:
+            # flow_rtd.json — correct ICE yesterday settle
+            _fk = (ticker, int(atm))
+            if _fk in _flow_rtd_opts:
+                prev_c, prev_p = _flow_rtd_opts[_fk]
+
+        # Final fallback: CSV px_settle
+        if prev_c is None or prev_p is None:
+            settle_ref = prev_date if (post_settle and last_date == today_str) else last_date
+            for r in ct_opts:
+                if r['ticker'] != ticker or abs(r['strike'] - atm) >= 0.01:
+                    continue
+                if r['date'] == settle_ref:
+                    if r['pc'] == 'Call' and r['px'] > 0 and prev_c is None:
+                        prev_c = r['px']
+                    elif r['pc'] == 'Put' and r['px'] > 0 and prev_p is None:
+                        prev_p = r['px']
+
+        # Serial-month B76 fallback: if CSV has no ATM strike for this serial,
+        # derive settlement straddle from the standard month's prior settlement IV.
+        # Same method used for the live value — always consistent and available.
+        if (prev_c is None or prev_p is None) and month_num not in CT_STANDARD_MONTHS:
+            _settle_ref2 = prev_date if (post_settle and last_date == today_str) else last_date
+            std_m2, std_y2 = next_standard_month(month_num, yr)
+            _inv_mc2 = {v: k for k, v in MONTH_CODE.items()}
+            std_tkr2 = f"CT{_inv_mc2.get(std_m2, '')}{str(std_y2)[-1:]}"
+            _std_settle_iv = atm_iv_for_date(std_tkr2, _settle_ref2)
+            _fwd_s2 = futures.get(std_tkr2) or futures.get(ticker)
+            if _std_settle_iv and _fwd_s2 and _fwd_s2 > 0 and T_settle > 0:
+                _half = b76_price(_fwd_s2, atm, T_settle, RISK_FREE, _std_settle_iv / 100.0, True)
+                if _half and _half > 0:
+                    prev_c = _half
+                    prev_p = _half
+
         prev_val = round(prev_c + prev_p, 2) if (prev_c and prev_p) else None
         chg      = round(val - prev_val, 2) if prev_val is not None else None
 
+        # % CHG on day = live IV − settlement IV
+        # Settlement IV uses T_settle (DTE as of last_date) not today's T — the settlement
+        # straddle price was set when the option had T_settle days left, not T days.
+        fwd_settle = (ice_fut_row.get('settle') if ice_fut_row else None) or futures.get(ticker)
+        settle_iv_pct = None
+        if prev_val and fwd_settle and fwd_settle > 0 and T_settle > 0:
+            df_s = math.exp(-RISK_FREE * T_settle)
+            call_eq_s = (prev_val + (fwd_settle - atm) * df_s) / 2.0
+            if call_eq_s > 0:
+                iv_s = implied_vol(call_eq_s, fwd_settle, atm, T_settle, RISK_FREE, True)
+                if iv_s:
+                    settle_iv_pct = round(iv_s * 100, 2)
+        chg_vol = round(iv_pct - settle_iv_pct, 2) if (iv_pct is not None and settle_iv_pct is not None) else None
+        if chg_vol is not None:
+            atm_iv_1d_chg[ticker] = chg_vol
+
         try:
-            breakeven = round(val / (atm * math.sqrt(dte)) * 100, 2)
+            breakeven = round(atm * (iv_pct / 100.0) / math.sqrt(252), 2) if iv_pct else None
         except (ValueError, ZeroDivisionError):
             breakeven = None
 
@@ -1155,7 +1750,7 @@ def load_data(commodity='CT'):
             'strike':    atm,
             'value':     val,
             'atm_vol':   iv_pct,
-            'chg_vol':   atm_iv_1d_chg.get(ticker),
+            'chg_vol':   chg_vol,
             'prev':      prev_val,
             'change':    chg,
             'dte':       dte,
@@ -1169,8 +1764,50 @@ def load_data(commodity='CT'):
 
     _persist_today(last_date)
 
-    return {
+    # Auto-persist (cold-start bootstrap only) — settle_watcher owns the main CSVs
+    # during trading hours. Only run after 16:30 ET AND settle_watcher has no record
+    # for today (i.e. it clearly did not run). Never write during the settlement window.
+    if _ice_raw and _ice_raw.get('options'):
+        ice_tickers_set  = set(s.upper() for s in _ice_raw['options'])
+        today_tickers_set = set(r['ticker'] for r in today_opts)
+        if ice_tickers_set - today_tickers_set:
+            _allow_persist = False
+            try:
+                try:
+                    from zoneinfo import ZoneInfo as _ZI2
+                except ImportError:
+                    from backports.zoneinfo import ZoneInfo as _ZI2
+                _now_et2 = datetime.now(_ZI2('America/New_York'))
+                _today_cal2 = _now_et2.strftime('%Y-%m-%d')
+                if (_now_et2.hour, _now_et2.minute) >= (16, 30):
+                    _status_path2 = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+                    try:
+                        with open(_status_path2, encoding='utf-8') as _sf2:
+                            _ss2 = json.load(_sf2)
+                        _sw_ran_today = (_ss2.get('date') == _today_cal2)
+                    except Exception:
+                        _sw_ran_today = False
+                    if not _sw_ran_today:
+                        _allow_persist = True
+            except Exception:
+                pass
+            if _allow_persist:
+                _snap = _ice_raw
+                _td   = last_date
+                def _auto_persist():
+                    try:
+                        _persist_ct_options_ice(_snap, _td)
+                        _persist_futures_ice(LOCAL_FUT_HISTORY, 'CT', _snap, _td)
+                        log.info('Cold-start auto-persist: %s', ice_tickers_set - today_tickers_set)
+                    except Exception as e:
+                        log.warning('Auto-persist failed: %s', e)
+                threading.Thread(target=_auto_persist, daemon=True).start()
+            else:
+                log.debug('Auto-persist skipped: before 16:30 ET or settle_watcher ran today')
+
+    _result = {
         'last_date':      last_date,
+        'today_str':      datetime.now().strftime('%Y-%m-%d'),
         'prev_date':      prev_date,
         'week_date':      week_date,
         'expiries':       expiry_list,
@@ -1203,6 +1840,19 @@ def load_data(commodity='CT'):
         'commodity':      'CT',
         'commodity_name': 'ICE Cotton No. 2',
     }
+    # Stale straddle guard: if RTD is offline and straddles are empty,
+    # serve the last cached straddles from today so the dashboard doesn't
+    # go blank between market close and settlement publication.
+    if not _result.get('straddles') and _ice_raw is None:
+        _prev = _ld_cache.get('CT')
+        if _prev and _prev['data'].get('last_date') == last_date:
+            _prev_strads = _prev['data'].get('straddles')
+            if _prev_strads:
+                _result['straddles'] = _prev_strads
+                log.debug('Straddles: serving cached values (RTD offline, same day)')
+
+    _ld_cache['CT'] = {'data': _result, 'ts': _now, 'om': _om, 'fm': _fm}
+    return _result
 
 # ── Daily persistence ─────────────────────────────────────────────────────────
 
@@ -1236,7 +1886,12 @@ def _persist_today(_unused=None):
     if opt_latest >= today_str and fut_latest >= today_str:
         return  # local is current — no network call needed
 
-    # Local is behind today — fetch GitHub and append any missing dates
+    # Local is behind today — fetch GitHub and write to Bloomberg shadow backup ONLY.
+    # The main pipeline CSVs (LOCAL_OPT_HISTORY, LOCAL_FUT_HISTORY) are written
+    # exclusively by settle_watcher.py from ICE RTD. Bloomberg data never enters
+    # the live pipeline. The backup files are a manual failsafe only.
+    os.makedirs(_BBG_BACKUP_DIR, exist_ok=True)
+
     try:
         if opt_latest < today_str:
             all_rows = fetch_csv(OPT_CSV_URL)
@@ -1245,16 +1900,16 @@ def _persist_today(_unused=None):
                         and r.get('commodity', '').strip().upper() == 'CT']
             if new_rows:
                 new_rows.sort(key=lambda r: r.get('date', ''))
-                need_header = not os.path.exists(LOCAL_OPT_HISTORY)
-                with open(LOCAL_OPT_HISTORY, 'a', newline='', encoding='utf-8') as f:
+                need_header = not os.path.exists(_BBG_OPT_BACKUP)
+                with open(_BBG_OPT_BACKUP, 'a', newline='', encoding='utf-8') as f:
                     w = csv.DictWriter(f, fieldnames=new_rows[0].keys())
                     if need_header:
                         w.writeheader()
                     w.writerows(new_rows)
                 new_dates = sorted(set(r.get('date','') for r in new_rows))
-                log.info('Persisted opt rows for %d new dates: %s', len(new_dates), new_dates)
+                log.info('Bloomberg backup: opt rows for %d dates: %s', len(new_dates), new_dates)
     except Exception as e:
-        log.warning('opt persist failed: %s', e)
+        log.warning('opt bloomberg backup failed: %s', e)
 
     try:
         if fut_latest < today_str:
@@ -1264,16 +1919,16 @@ def _persist_today(_unused=None):
                          and r.get('commodity', '').strip().upper() == 'CT']
             if today_raw:
                 today_raw.sort(key=lambda r: r.get('date', ''))
-                need_header = not os.path.exists(LOCAL_FUT_HISTORY)
-                with open(LOCAL_FUT_HISTORY, 'a', newline='', encoding='utf-8') as f:
-                    w = csv.DictWriter(f, fieldnames=today_raw[0].keys())
+                need_header = not os.path.exists(_BBG_FUT_BACKUP)
+                with open(_BBG_FUT_BACKUP, 'a', newline='', encoding='utf-8') as f:
+                    w = csv.DictWriter(f, fieldnames=today_raw[0].keys(), extrasaction='ignore')
                     if need_header:
                         w.writeheader()
                     w.writerows(today_raw)
                 new_dates = sorted(set(r.get('date','') for r in today_raw))
-                log.info('Persisted fut rows for %d new dates: %s', len(new_dates), new_dates)
+                log.info('Bloomberg backup: fut rows for %d dates: %s', len(new_dates), new_dates)
     except Exception as e:
-        log.warning('fut persist failed: %s', e)
+        log.warning('fut bloomberg backup failed: %s', e)
 
 
 def _persist_today_generic(commodity):
@@ -1345,24 +2000,31 @@ def _persist_today_generic(commodity):
 
 # ── ICE RTD daily settle persistence ──────────────────────────────────────────
 
-def _read_csv_dates(path):
-    """Return set of 'date' column values already in a CSV file."""
-    dates = set()
+
+
+
+def _delete_date_from_csv(path, date_str, commodity=None):
+    """Remove all rows matching date_str (and optional commodity) from a CSV in-place."""
     if not os.path.exists(path):
-        return dates
+        return
     try:
         with open(path, 'r', newline='', encoding='utf-8') as f:
-            for row in csv.DictReader(f):
-                d = row.get('date', '').strip()
-                if d:
-                    dates.add(d)
-    except Exception:
-        pass
-    return dates
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            rows = list(reader)
+        kept = [r for r in rows
+                if r.get('date', '').strip() != date_str
+                or (commodity and r.get('commodity', '').strip().upper() != commodity.upper())]
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(kept)
+    except Exception as e:
+        log.warning('_delete_date_from_csv(%s, %s) failed: %s', path, date_str, e)
 
 
 def _contract_code_to_month_year(contract_code, prefix):
-    """'CTN6' → (month_num=7, year=2026). Uses base decade 2020 (consistent with parse_generic_ticker)."""
+    """'CTN6' → (month_num=7, year=2026)."""
     plen = len(prefix)
     code = contract_code[plen:]
     if len(code) < 2:
@@ -1372,7 +2034,7 @@ def _contract_code_to_month_year(contract_code, prefix):
     if month_num is None:
         return None
     try:
-        year = 2020 + int(code[1])
+        year = _decade_year(int(code[1]))
     except (ValueError, IndexError):
         return None
     return month_num, year
@@ -1426,17 +2088,28 @@ _CT_OPT_FIELDS      = ['date','commodity','security_des','contract_month','put_c
                         'strike_px','open_int','oi_chg','px_settle','px_volume']
 _GENERIC_OPT_FIELDS = ['date','commodity','security_des','strike_px',
                         'px_settle','open_int','oi_chg','px_volume']
-_FUT_FIELDS         = ['date','commodity','contract','bbg_ticker',
+_FUT_FIELDS         = ['date','commodity','contract',
                         'settle','open_int','oi_chg','first_notice','last_trade']
 
 
 def _persist_ct_options_ice(ice_data, today_str):
-    """Append today's CT option settles from ICE RTD to local_options_history.csv."""
+    """Upsert today's CT option settles from ICE RTD into local_options_history.csv."""
+    # Never overwrite data that settle_watcher.py has already confirmed as settled.
+    # settle_watcher owns the settled rows — live RTD prices must not replace them.
+    _status_path = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+    try:
+        with open(_status_path, encoding='utf-8') as _sf:
+            _st = json.load(_sf)
+        if _st.get('date') == today_str and _st.get('options_settled'):
+            log.info('CT options already settled for %s — skipping auto-persist', today_str)
+            return 0
+    except Exception:
+        pass
+
     options = ice_data.get('options', {})
     if not options:
         return 0
-    if today_str in _read_csv_dates(LOCAL_OPT_HISTORY):
-        return 0
+    _delete_date_from_csv(LOCAL_OPT_HISTORY, today_str, commodity='CT')
 
     rows = []
     for sheet_name, chain in options.items():
@@ -1482,12 +2155,11 @@ def _persist_ct_options_ice(ice_data, today_str):
 
 
 def _persist_generic_options_ice(opt_path, commodity, ice_data, today_str):
-    """Append today's option settles from ICE RTD to local_{kc/sb/cc}_options_history.csv."""
+    """Upsert today's option settles from ICE RTD into local_{kc/sb/cc}_options_history.csv."""
     options = ice_data.get('options', {})
     if not options:
         return 0
-    if today_str in _read_csv_dates(opt_path):
-        return 0
+    _delete_date_from_csv(opt_path, today_str, commodity=commodity)
 
     rows = []
     prefix = commodity.upper()
@@ -1527,15 +2199,54 @@ def _persist_generic_options_ice(opt_path, commodity, ice_data, today_str):
 
 
 def _persist_futures_ice(fut_path, commodity, ice_data, today_str):
-    """Append today's futures settles from ICE RTD to the local futures CSV."""
+    """Upsert today's futures settles from ICE RTD into the local futures CSV."""
+    # Never overwrite data that settle_watcher.py has already confirmed as settled.
+    if commodity.upper() == 'CT':
+        _status_path = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+        try:
+            with open(_status_path, encoding='utf-8') as _sf:
+                _st = json.load(_sf)
+            if _st.get('date') == today_str and _st.get('futures_settled'):
+                log.info('CT futures already settled for %s — skipping auto-persist', today_str)
+                return 0
+        except Exception:
+            pass
+
     futures = ice_data.get('futures', {})
     if not futures:
         return 0
-    if today_str in _read_csv_dates(fut_path):
-        return 0
+    _delete_date_from_csv(fut_path, today_str, commodity=commodity)
 
     prefix  = commodity.upper()
     lt_fn   = _build_lt_fn_lookup(fut_path, prefix)
+
+    # Build previous OI lookup from the most recent CSV entry per contract
+    # so oi_chg is computed and stored at write time rather than patched at read time.
+    prev_oi = {}
+    try:
+        for row in read_local_csv(fut_path):
+            if row.get('commodity', '').strip().upper() != prefix:
+                continue
+            if (row.get('date', '').strip()) == today_str:
+                continue
+            contract = row.get('contract', '').strip()
+            oi_s     = row.get('open_int', '').strip()
+            date_s   = row.get('date', '').strip()
+            if not contract or not oi_s or not date_s:
+                continue
+            res2 = _contract_code_to_month_year(contract, prefix)
+            if not res2:
+                continue
+            try:
+                oi_f = float(oi_s)
+            except (ValueError, TypeError):
+                continue
+            if res2 not in prev_oi or date_s > prev_oi[res2][0]:
+                prev_oi[res2] = (date_s, oi_f)
+    except Exception:
+        pass
+    prev_oi = {k: v[1] for k, v in prev_oi.items()}
+
     rows    = []
     for contract_code, f in futures.items():
         settle = f.get('settle')
@@ -1549,14 +2260,19 @@ def _persist_futures_ice(fut_path, commodity, ice_data, today_str):
         if not ordinal_contract:
             continue
         lt_fn_info = lt_fn.get((month_num, year), {})
+        new_oi  = f.get('oi')
+        old_oi  = prev_oi.get((month_num, year))
+        try:
+            oi_chg = round(float(new_oi) - old_oi) if (new_oi is not None and old_oi is not None) else ''
+        except (TypeError, ValueError):
+            oi_chg = ''
         rows.append({
             'date':         today_str,
             'commodity':    prefix,
             'contract':     ordinal_contract,
-            'bbg_ticker':   f'{ordinal_contract} Comdty',
             'settle':       round(float(settle), 4),
-            'open_int':     f.get('oi') or '',
-            'oi_chg':       '',
+            'open_int':     new_oi or '',
+            'oi_chg':       oi_chg,
             'first_notice': lt_fn_info.get('first_notice') or '',
             'last_trade':   lt_fn_info.get('last_trade') or '',
         })
@@ -1573,89 +2289,74 @@ def _persist_futures_ice(fut_path, commodity, ice_data, today_str):
     return len(rows)
 
 
-def _persist_ice_all():
-    """Persist today's ICE RTD settle data for all 4 commodities. Idempotent."""
-    today_str = datetime.today().strftime('%Y-%m-%d')
-    results   = {}
+# Settlement persistence is handled by Options_flow_analyzer/settle_watcher.py.
+# That process runs daily from 14:25 ET, detects settlement via RTD workbook,
+# and writes to local_futures_history.csv, local_futures_spreads_history.csv,
+# and local_options_history.csv. The _ld_cache invalidates on file mtime change
+# so the dashboard picks up new data automatically on the next browser refresh.
 
-    for commodity in ('CT', 'KC', 'SB', 'CC'):
-        try:
-            ice_data = _ice_rtd_reader.read_ice_workbook(commodity) if _ice_rtd_reader else None
-        except Exception as e:
-            log.warning('ICE read failed for %s: %s', commodity, e)
-            ice_data = None
+# ── Background schedulers ─────────────────────────────────────────────────────
 
-        if not ice_data or ice_data.get('mode') == 'unavailable':
-            results[commodity] = 'unavailable'
-            continue
+# Pre-close cache flush: 19:15 BST = 14:15 ET — forces a fresh live data load
+# 5 minutes before the 14:20 CT close so cached values are current at EOD.
+PRECLOSE_FLUSH_HOUR   = 19
+PRECLOSE_FLUSH_MINUTE = 15
 
-        cfg   = COMMODITY_CONFIG[commodity]
-        total = 0
-        try:
-            if commodity == 'CT':
-                total += _persist_ct_options_ice(ice_data, today_str)
-            else:
-                total += _persist_generic_options_ice(cfg['opt_csv'], commodity, ice_data, today_str)
-            total += _persist_futures_ice(cfg['fut_csv'], commodity, ice_data, today_str)
-        except Exception as e:
-            log.warning('%s persist error: %s', commodity, e)
-            results[commodity] = f'error: {e}'
-            continue
-        results[commodity] = total
-
-    _skew_hist_cache.clear()
-    log.info('ICE persist complete: %s', results)
-    return results
+_preclose_timer      = None
+_preclose_timer_lock = threading.Lock()
 
 
-# ── Background settle scheduler ───────────────────────────────────────────────
-
-_settle_timer      = None
-_settle_timer_lock = threading.Lock()
-
-
-def _run_scheduled_fetch():
-    """Called by timer at SETTLE_FETCH_HOUR:SETTLE_FETCH_MINUTE. Persists and reschedules."""
-    log.info('Scheduled settle fetch firing')
-    try:
-        _persist_ice_all()
-    except Exception as e:
-        log.error('Scheduled settle fetch error: %s', e)
-    finally:
-        _schedule_settle_fetch()
+def _run_preclose_flush():
+    """Cache flush at PRECLOSE_FLUSH_HOUR:PRECLOSE_FLUSH_MINUTE. No CSV write — live data only."""
+    log.info('Pre-close cache flush firing')
+    _cache.clear()
+    _ld_cache.clear()
+    _schedule_preclose_flush()
 
 
-def _schedule_settle_fetch():
-    """Schedule next settle fetch. Cancels any existing timer first."""
-    global _settle_timer
-    with _settle_timer_lock:
-        if _settle_timer is not None:
-            _settle_timer.cancel()
+def _schedule_preclose_flush():
+    global _preclose_timer
+    with _preclose_timer_lock:
+        if _preclose_timer is not None:
+            _preclose_timer.cancel()
         now    = datetime.now()
-        target = now.replace(hour=SETTLE_FETCH_HOUR, minute=SETTLE_FETCH_MINUTE,
+        target = now.replace(hour=PRECLOSE_FLUSH_HOUR, minute=PRECLOSE_FLUSH_MINUTE,
                              second=0, microsecond=0)
         if target <= now:
             target += timedelta(days=1)
         delay = (target - now).total_seconds()
-        _settle_timer = threading.Timer(delay, _run_scheduled_fetch)
-        _settle_timer.daemon = True
-        _settle_timer.start()
-        log.info('Next settle fetch in %.0f s (at %s)', delay, target.strftime('%H:%M'))
+        _preclose_timer = threading.Timer(delay, _run_preclose_flush)
+        _preclose_timer.daemon = True
+        _preclose_timer.start()
+        log.info('Next pre-close flush in %.0f s (at %s)', delay, target.strftime('%H:%M'))
+
+
 
 
 def _compute_hv(fut_path, commodity, windows=(10, 30, 60, 90)):
     """
-    Historical volatility from local futures CSV, using the ordinal-1 (front-month)
-    settle series. Roll returns (days where the contract suffix changes) are excluded.
-    Returns {'hv10': ..., 'hv30': ..., 'hv60': ..., 'hv90': ...} as decimals (0.15 = 15%).
-    Returns {} when data is insufficient or the file is missing.
+    Historical volatility from local futures CSV, computed per ordinal contract series.
+    CTJUL1 = current nearest-Jul contract (e.g. CTN6), CTDEC1 = CTZ6, CTJUL2 = CTN7, etc.
+    Each series is computed independently; roll jumps (>15% daily) are excluded.
+    Returns {ticker: {'hv10': ..., 'hv30': ..., 'hv60': ..., 'hv90': ...}} as decimals.
     """
     if not os.path.exists(fut_path):
         return {}
     prefix = commodity.upper()
     plen   = len(prefix)
+    _month_letter = {v: k for k, v in MONTH_CODE.items()}  # int → letter
 
-    rows_by_date = {}
+    # Collect settle prices and last_trade per ordinal contract name.
+    # Also collect individual contract rows (e.g. CTN6) separately so we can
+    # append them to the ordinal series tail (settle_watcher writes individual
+    # rows for recent dates once the ordinal series stops rolling).
+    contract_prices = {}   # {contract_name: [(date_str, settle), ...]}
+    contract_lt     = {}   # {contract_name: last_trade_str}
+    indiv_prices    = {}   # {ticker: [(date_str, settle), ...]} e.g. {'CTN6': [...]}
+
+    # Individual contract pattern: exactly plen+2 chars, e.g. CTN6 (CT + N + 6)
+    _indiv_re = re.compile(r'^' + re.escape(prefix) + r'([FGHJKMNQUVXZ])(\d)$')
+
     try:
         with open(fut_path, 'r', newline='', encoding='utf-8') as f:
             for row in csv.DictReader(f):
@@ -1664,12 +2365,8 @@ def _compute_hv(fut_path, commodity, windows=(10, 30, 60, 90)):
                 contract = (row.get('contract') or '').strip()
                 settle_s = (row.get('settle') or '').strip()
                 date_s   = (row.get('date') or '').strip()
+                lt_s     = (row.get('last_trade') or '').strip()
                 if not contract or not settle_s or not date_s:
-                    continue
-                if len(contract) < plen + 4:
-                    continue
-                suffix_3 = contract[plen:plen + 3].upper()
-                if contract[plen + 3:] != '1':
                     continue
                 try:
                     settle = float(settle_s)
@@ -1677,42 +2374,78 @@ def _compute_hv(fut_path, commodity, windows=(10, 30, 60, 90)):
                         continue
                 except (ValueError, TypeError):
                     continue
-                if date_s not in rows_by_date:
-                    rows_by_date[date_s] = (suffix_3, settle)
+                if _indiv_re.match(contract):
+                    indiv_prices.setdefault(contract, []).append((date_s, settle))
+                elif len(contract) >= plen + 4:
+                    contract_prices.setdefault(contract, []).append((date_s, settle))
+                    if lt_s:
+                        contract_lt[contract] = lt_s
     except Exception:
         return {}
 
-    if not rows_by_date:
-        return {}
-
-    log_returns = []
-    prev_settle = None
-    prev_suffix = None
-    for d in sorted(rows_by_date):
-        suffix, settle = rows_by_date[d]
-        if prev_settle is not None and prev_suffix == suffix:
-            try:
-                log_returns.append(math.log(settle / prev_settle))
-            except (ValueError, ZeroDivisionError):
-                pass
-        prev_settle = settle
-        prev_suffix = suffix
-
     result = {}
-    for w in windows:
-        if len(log_returns) >= w:
+    max_w = max(windows)
+
+    for contract, price_list in contract_prices.items():
+        if len(price_list) < 5:
+            continue
+        # Identify ticker from last_trade date + month suffix
+        lt_str   = contract_lt.get(contract)
+        if not lt_str:
+            continue
+        suffix_3 = contract[plen:plen + 3].upper()
+        month_num = FUTURES_MONTH_FROM_SUFFIX.get(suffix_3)
+        if not month_num:
+            continue
+        try:
+            lt_dt = datetime.strptime(lt_str, '%Y-%m-%d')
+            year  = lt_dt.year if lt_dt.month <= month_num else lt_dt.year + 1
+        except ValueError:
+            continue
+        month_letter = _month_letter.get(month_num)
+        if not month_letter:
+            continue
+        ticker = f"{prefix}{month_letter}{str(year)[-1:]}"
+
+        # Extend ordinal series with any individual contract rows (e.g. CTN6)
+        # that come after the last ordinal row — settle_watcher writes these
+        # for the most recent trading days once the ordinal series stops.
+        indiv = sorted(indiv_prices.get(ticker, []), key=lambda x: x[0])
+        if indiv:
+            last_ord_date = sorted(price_list, key=lambda x: x[0])[-1][0]
+            price_list = price_list + [(d, s) for d, s in indiv if d > last_ord_date]
+
+        # Compute log returns from the tail of the series (enough for max window)
+        sorted_prices = sorted(price_list, key=lambda x: x[0])
+        tail = sorted_prices[-(max_w + 10):]   # grab a bit more than needed
+        log_returns = []
+        for i in range(1, len(tail)):
+            prev_s, curr_s = tail[i-1][1], tail[i][1]
+            if prev_s > 0 and curr_s > 0:
+                try:
+                    lr = math.log(curr_s / prev_s)
+                    if abs(lr) < 0.15:   # exclude roll-day jumps
+                        log_returns.append(lr)
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        hv = {}
+        for w in windows:
             sample = log_returns[-w:]
-            n      = len(sample)
-            mean   = sum(sample) / n
-            var    = sum((x - mean) ** 2 for x in sample) / max(n - 1, 1)
-            result[f'hv{w}'] = math.sqrt(var) * math.sqrt(252)
-        else:
-            result[f'hv{w}'] = None
+            if len(sample) >= max(w // 2, 5):
+                n    = len(sample)
+                mean = sum(sample) / n
+                var  = sum((x - mean) ** 2 for x in sample) / max(n - 1, 1)
+                hv[f'hv{w}'] = math.sqrt(var) * math.sqrt(252)
+            else:
+                hv[f'hv{w}'] = None
+        result[ticker] = hv
+
     return result
 
 
 def _load_generic_data(commodity):
-    """Load and compute options analytics for KC, SB, or CC (settle-only, no RTD)."""
+    """Load and compute options analytics for KC, SB, or CC with full ICE RTD live data."""
     cfg        = COMMODITY_CONFIG[commodity]
     prefix     = cfg['prefix']
     std_months = cfg['std_months']
@@ -1720,8 +2453,8 @@ def _load_generic_data(commodity):
     serial_map = cfg['serial_map']
 
     try:
-        opt_rows = read_local_csv(cfg['opt_csv'])
-        oi_rows  = read_local_csv(cfg['fut_csv'])
+        opt_rows = fetch_csv(OPT_CSV_URL)
+        oi_rows  = fetch_csv(OI_CSV_URL)
     except Exception as e:
         return {'error': str(e)}
 
@@ -1734,8 +2467,8 @@ def _load_generic_data(commodity):
             continue
         try:
             px  = float(r.get('px_settle', 0) or 0)
-            oi  = int(r.get('open_int', 0) or 0)
-            oic = int(r.get('oi_chg', 0) or 0)
+            oi  = int(float(r.get('open_int', 0) or 0))
+            oic = int(float(r.get('oi_chg', 0) or 0))
             vol = float(r.get('px_volume', 0) or 0)
         except (ValueError, TypeError):
             continue
@@ -1753,7 +2486,7 @@ def _load_generic_data(commodity):
     comm_fut = [r for r in oi_rows if r.get('commodity', '').strip().upper() == commodity]
 
     rtd = None
-    if _ice_rtd_reader:
+    if _ice_rtd_reader and not _in_ct_settle_window():
         try:
             rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook(commodity))
         except Exception as e:
@@ -1869,13 +2602,10 @@ def _load_generic_data(commodity):
         if not exp:
             if commodity == 'KC':
                 exp = _kc_opt_expiry(month_num, year)
-            else:
-                std_m = serial_map.get(month_num, month_num) if month_num not in std_months else month_num
-                for k in [(month_num, year), (std_m, year)]:
-                    e = fut_lookup.get(k)
-                    if e and e.get('last_trade'):
-                        exp = e['last_trade']
-                        break
+            elif commodity == 'CC':
+                exp = _cc_opt_expiry(month_num, year)
+            elif commodity == 'SB':
+                exp = _sb_opt_expiry(month_num, year)
         if exp:
             last_trade[ticker] = exp
 
@@ -2142,11 +2872,12 @@ def _load_generic_data(commodity):
         data_source = rtd.get('source', 'csv_only')
         for tkr, d in (rtd.get('outrights') or {}).items():
             hv_data[tkr]      = {k: d.get(k) for k in ('hv10', 'hv30', 'hv60', 'hv90')}
-            live_futures[tkr] = {k: d.get(k) for k in
-                                 ('last', 'settle', 'change', 'pct_chg',
-                                  'oi', 'oi_chg', 'volume', 'high', 'low')}
-        rtd_spreads = {tkr: {k: d.get(k) for k in ('settle', 'change', 'legs')}
-                       for tkr, d in (rtd.get('spreads') or {}).items()}
+            live_futures[tkr] = {k: d.get(k) for k in (
+                'last', 'settle', 'yest_settle', 'change', 'pct_chg',
+                'oi', 'oi_chg', 'volume', 'high', 'low',
+                'block_vol', 'efs_vol', 'efp_vol',
+            )}
+        rtd_spreads = {key: d for key, d in (rtd.get('spreads') or {}).items()}
 
     # ── Live smile from ICE RTD option bid/ask ────────────────────────────────
     live_smile     = {}
@@ -2237,18 +2968,153 @@ def _load_generic_data(commodity):
                     live_iv = implied_vol(call_eq, live_F, live_atm, T, RISK_FREE, True)
                     if live_iv and 0.01 < live_iv < 2.00:
                         atm_iv[ticker] = round(live_iv * 100, 2)
-                        iv_p = atm_iv_for_date(ticker, prev_date, prev_futures.get(ticker))
-                        if iv_p is not None:
-                            atm_iv_1d_chg[ticker] = round(live_iv * 100 - iv_p * 100, 2)
+                        # 1D chg: live IV − settlement IV (from last_date CSV, not prev_date)
+                        settle_iv_base = atm_iv_for_date(ticker, last_date)
+                        if settle_iv_base is not None:
+                            atm_iv_1d_chg[ticker] = round(live_iv * 100 - settle_iv_base * 100, 2)
                         iv_w = atm_iv_for_date(ticker, week_date, week_futures.get(ticker))
                         if iv_w is not None:
                             atm_iv_1w_chg[ticker] = round(live_iv * 100 - iv_w * 100, 2)
 
     # ── HV from local futures history ─────────────────────────────────────────
     csv_hv = _compute_hv(cfg['fut_csv'], commodity)
-    if csv_hv:
-        for tkr in expiry_list:
-            hv_data.setdefault(tkr, {}).update(csv_hv)
+    for tkr in expiry_list:
+        if tkr in csv_hv:
+            hv_data.setdefault(tkr, {}).update(csv_hv[tkr])
+
+    # ── Straddle run — live bid/offer mid from ICE RTD ────────────────────────
+    straddles = []
+    live_opts_map_s = (rtd.get('live_options') or {}) if rtd else {}
+    outrights_map   = (rtd.get('outrights')    or {}) if rtd else {}
+
+    for ticker in expiry_list:
+        lt    = last_trade.get(ticker)
+        label = expiry_labels.get(ticker)
+        if not lt:
+            continue
+
+        lo          = live_opts_map_s.get(ticker)
+        out_row     = outrights_map.get(ticker, {})
+        strike_list = (lo.get('strikes') or []) if lo else []
+
+        # Forward: bid/offer mid → last → settle
+        _fb = out_row.get('bid') if hasattr(out_row, 'get') else None
+        _fo = out_row.get('offer') if hasattr(out_row, 'get') else None
+        if _fb and _fo and _fb > 0 and _fo > 0:
+            fwd = (_fb + _fo) / 2.0
+        elif out_row.get('last') and out_row['last'] > 0:
+            fwd = out_row['last']
+        else:
+            fwd = out_row.get('settle') or futures.get(ticker)
+
+        if not fwd:
+            continue
+
+        # ATM from live strikes or CSV fallback
+        avail = sorted(set(s['strike'] for s in strike_list)) if strike_list else []
+        atm   = min(avail, key=lambda k: abs(k - fwd)) if avail else atm_strike.get(ticker)
+        if not atm:
+            continue
+
+        # Live straddle value: bid/offer mid → last → settle at ATM
+        today_c = today_p = None
+        for s in strike_list:
+            if abs(s['strike'] - atm) >= 0.01:
+                continue
+            bid, ask = s.get('bid'), s.get('ask')
+            mid = (bid + ask) / 2.0 if (bid and ask and bid > 0 and ask > 0) else s.get('mid')
+            if not (mid and mid > 0):
+                mid = s.get('settle')  # deferred contracts: use RTD settle price
+            if mid and mid > 0:
+                if s['pc'] == 'Call': today_c = mid
+                elif s['pc'] == 'Put': today_p = mid
+
+        try:
+            dte = max(0, (datetime.strptime(lt, '%Y-%m-%d') -
+                          datetime.strptime(last_date, '%Y-%m-%d')).days)
+        except ValueError:
+            continue
+        if dte <= 0:
+            continue
+        T = dte / 365.0
+
+        if today_c is not None and today_p is not None:
+            val = round(today_c + today_p, 2)
+        else:
+            iv_pct_s = atm_iv.get(ticker)
+            if not iv_pct_s:
+                continue
+            val = round(b76_price(fwd, atm, T, RISK_FREE, iv_pct_s / 100.0, True) +
+                        b76_price(fwd, atm, T, RISK_FREE, iv_pct_s / 100.0, False), 2)
+
+        df_t    = math.exp(-RISK_FREE * T)
+        call_eq = (val + (fwd - atm) * df_t) / 2.0
+        iv_pct  = None
+        if call_eq > 0:
+            iv = implied_vol(call_eq, fwd, atm, T, RISK_FREE, True)
+            if iv:
+                iv_pct = round(iv * 100, 2)
+        if iv_pct is None:
+            iv_pct = atm_iv.get(ticker)
+
+        # Settlement straddle from last_date CSV at live ATM strike
+        prev_c = prev_p = None
+        for r in comm_opts:
+            if r['ticker'] != ticker or r['date'] != last_date or abs(r['strike'] - atm) >= 0.01:
+                continue
+            if r['pc'] == 'Call' and r['px'] > 0: prev_c = r['px']
+            elif r['pc'] == 'Put'  and r['px'] > 0: prev_p = r['px']
+
+        # Fallback: use RTD settle prices when deferred contract not in local CSV
+        if prev_c is None:
+            for s in strike_list:
+                if abs(s['strike'] - atm) >= 0.01: continue
+                if s['pc'] == 'Call' and s.get('settle') and s['settle'] > 0:
+                    prev_c = s['settle']
+                    break
+        if prev_p is None:
+            for s in strike_list:
+                if abs(s['strike'] - atm) >= 0.01: continue
+                if s['pc'] == 'Put' and s.get('settle') and s['settle'] > 0:
+                    prev_p = s['settle']
+                    break
+
+        prev_val = round(prev_c + prev_p, 2) if (prev_c and prev_p) else None
+        chg      = round(val - prev_val, 2) if prev_val is not None else None
+
+        # Settlement IV → 1D chg_vol
+        fwd_settle   = out_row.get('settle') or futures.get(ticker)
+        settle_iv_pct = None
+        if prev_val and fwd_settle and fwd_settle > 0 and T > 0:
+            df_s = math.exp(-RISK_FREE * T)
+            ceq_s = (prev_val + (fwd_settle - atm) * df_s) / 2.0
+            if ceq_s > 0:
+                iv_s = implied_vol(ceq_s, fwd_settle, atm, T, RISK_FREE, True)
+                if iv_s:
+                    settle_iv_pct = round(iv_s * 100, 2)
+        chg_vol = round(iv_pct - settle_iv_pct, 2) if (iv_pct is not None and settle_iv_pct is not None) else None
+        if chg_vol is not None:
+            atm_iv_1d_chg[ticker] = chg_vol
+
+        try:
+            breakeven = round(atm * (iv_pct / 100.0) / math.sqrt(252), 2) if iv_pct else None
+        except (ValueError, ZeroDivisionError):
+            breakeven = None
+
+        straddles.append({
+            'ticker':    ticker,
+            'label':     label,
+            'forward':   round(fwd, 2),
+            'strike':    atm,
+            'value':     val,
+            'atm_vol':   iv_pct,
+            'chg_vol':   chg_vol,
+            'prev':      prev_val,
+            'change':    chg,
+            'dte':       dte,
+            'expiry':    lt,
+            'breakeven': breakeven,
+        })
 
     _persist_today_generic(commodity)
 
@@ -2282,6 +3148,7 @@ def _load_generic_data(commodity):
         'data_source':    data_source,
         'live_smile':     live_smile,
         'live_smile_fwd': live_smile_fwd,
+        'straddles':      straddles,
         'commodity':      commodity,
         'commodity_name': cfg['name'],
     }
@@ -2304,8 +3171,8 @@ def compute_skew_history(commodity='CT'):
         return _cache_entry['data']
 
     try:
-        opt_rows = read_local_csv(cfg['opt_csv'])
-        oi_rows  = read_local_csv(cfg['fut_csv'])
+        opt_rows = fetch_csv(OPT_CSV_URL)
+        oi_rows  = fetch_csv(OI_CSV_URL)
     except Exception as e:
         return {'error': str(e)}
 
@@ -2402,9 +3269,10 @@ def compute_skew_history(commodity='CT'):
                 exp_str = option_expiry_date(mo, yr)
             elif commodity == 'KC':
                 exp_str = _kc_opt_expiry(mo, yr)
-            else:
-                std_m2 = serial_map.get(mo, mo) if mo not in std_months else mo
-                exp_str = fut_lt.get((mo, yr)) or fut_lt.get((std_m2, yr))
+            elif commodity == 'CC':
+                exp_str = _cc_opt_expiry(mo, yr)
+            elif commodity == 'SB':
+                exp_str = _sb_opt_expiry(mo, yr)
         if not exp_str:
             continue
         std_m = mo if mo in std_months else serial_map.get(mo, mo)
@@ -2550,9 +3418,15 @@ def compute_skew_history(commodity='CT'):
         for k in SERIES_KEYS:
             rolling[k].append(best.get(k))
 
-    # Per-ticker series (only include if >= 10 dates)
+    # Per-ticker series — only active/future contracts (expiry >= today)
+    today_iso = datetime.utcnow().strftime('%Y-%m-%d')
     ticker_series = {}
     for ticker, date_map in ticker_date_ivs.items():
+        meta = ticker_meta.get(ticker)
+        if not meta:
+            continue
+        if meta['expiry'] < today_iso:
+            continue
         sorted_dates = sorted(date_map.keys())
         if len(sorted_dates) < 10:
             continue
@@ -2600,16 +3474,12 @@ def api_debug():
         return jsonify({'error': str(e)})
 
     rtd = None
-    if _ice_rtd_reader:
+    if _ice_rtd_reader and not _in_ct_settle_window():
         try:
             rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook('CT'))
         except Exception:
             pass
-    if rtd is None and _rtd_reader:
-        try:
-            rtd = _rtd_reader.read_live()
-        except Exception:
-            pass
+
 
     ct_opts = []
     for r in opt_rows:
@@ -2620,7 +3490,7 @@ def api_debug():
             continue
         try:
             px  = float(r.get('px_settle', 0) or 0)
-            oi  = int(r.get('open_int', 0) or 0)
+            oi  = int(float(r.get('open_int', 0) or 0))
         except (ValueError, TypeError):
             continue
         ct_opts.append({'date': r.get('date','').strip(), 'ticker': parsed['ticker'],
@@ -2679,7 +3549,7 @@ def api_debug():
     )
 
     live_opts_dbg = (rtd.get('live_options') or {}) if rtd else {}
-    sheet_names = _rtd_reader.workbook_sheet_names() if _rtd_reader else []
+    sheet_names = []
     out = {'csv_last_date': last_date, 'rtd_available': rtd is not None,
            'rtd_source': rtd.get('source') if rtd else None,
            'workbook_sheets': sheet_names,
@@ -2775,27 +3645,6 @@ def api_debug():
 
     return _no_cache(jsonify(out))
 
-@server.route('/api/debug-rtd')
-def api_debug_rtd():
-    """Show raw RTD data: straddles sheet + options sheet + live_smile sample."""
-    rtd = None
-    if _rtd_reader:
-        try:
-            rtd = _rtd_reader.read_live()
-        except Exception as e:
-            return jsonify({'error': str(e)})
-    if not rtd:
-        return jsonify({'error': 'RTD not available'})
-    straddles = rtd.get('straddles') or {}
-    options   = rtd.get('options')   or {}
-    out = {
-        'source': rtd.get('source'),
-        'straddles': {k: v for k, v in straddles.items()},
-        'options_atm': {k: {f: v[f] for f in ('atm_strike','atm_vol_rtd','strad_val_rtd','call_value','put_value') if f in v}
-                        for k, v in options.items()},
-    }
-    return _no_cache(jsonify(out))
-
 @server.route('/api/skew-history')
 def api_skew_history():
     commodity = request.args.get('commodity', 'CT').upper()
@@ -2803,25 +3652,445 @@ def api_skew_history():
         return _no_cache(jsonify({'error': f'Unknown commodity: {commodity}'}))
     return _no_cache(jsonify(compute_skew_history(commodity)))
 
-@server.route('/api/debug/sheet')
-def api_debug_sheet():
-    """Show raw first rows of the 'all options' sheet for diagnostics."""
-    if not _rtd_reader:
-        return jsonify({'error': 'rtd_reader not available'})
-    result = _rtd_reader.read_sheet_sample('all options')
-    return _no_cache(jsonify(result))
-
-@server.route('/api/fetch-settles', methods=['POST'])
-def api_fetch_settles():
-    """Manual trigger: persist today's ICE RTD settles for all commodities."""
+@server.route('/api/eod-email')
+def api_eod_email():
+    """
+    Assembles the four-section EOD email data for ICE Cotton No. 2.
+    Straddles  — full straddle tab output (all contracts, all columns)
+    Futures    — standard delivery months with all ICE RTD columns
+    Spreads    — calendar spreads direct from ICE RTD (all columns)
+    HV         — 10/30/60/90-day historical volatility
+    """
     try:
-        results = _persist_ice_all()
-        return jsonify({'status': 'ok', 'results': results})
+        d = load_data('CT')
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return jsonify({'error': str(e)}), 500
+    if 'error' in d:
+        return jsonify({'error': d['error']}), 500
+
+    # Timestamp in ET
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo as _ZI
+    now_et  = datetime.now(_ZI('America/New_York'))
+    time_et = now_et.strftime('%H:%M ET')
+
+    # ── Straddles: full list as shown on the straddle tab / PNG ──────────────
+    straddles = d.get('straddles', [])
+
+    # ── Futures: all contracts present in live_futures, calendar order ───────
+    lf = d.get('live_futures', {})
+    def _lf_sort_key(tkr):
+        p = parse_ct_ticker(tkr)
+        return (p[1], p[2]) if p else (9999, 99)
+    std_tickers = sorted(
+        [t for t in lf if parse_ct_ticker(t)
+         and parse_ct_ticker(t)[2] not in CT_EXCLUDED_MONTHS],
+        key=_lf_sort_key
+    )
+    futures_rows = []
+    for tkr in std_tickers:
+        f    = lf.get(tkr, {})
+        lbl  = d['expiry_labels'].get(tkr, tkr)
+        stt  = f.get('settle')
+        yest = f.get('yest_settle')
+        chg  = f.get('change')
+        pct  = f.get('pct_chg')
+        # Fallback: CSV settle when RTD settle not yet available
+        if stt is None:
+            stt = d['futures'].get(tkr)
+        # Compute pct_chg if missing but derivable
+        if pct is None and chg is not None and yest and yest != 0:
+            pct = round(chg / yest * 100, 2)
+        futures_rows.append({
+            'label':      lbl,
+            'settle':     stt,
+            'yest_settle': yest,
+            'change':     chg,
+            'pct_chg':    pct,
+            'high':       f.get('high'),
+            'low':        f.get('low'),
+            'volume':     f.get('volume'),
+            'efp_vol':    f.get('efp_vol'),
+            'efs_vol':    f.get('efs_vol'),
+            'block_vol':  f.get('block_vol'),
+            'oi':         f.get('oi'),
+            'oi_chg':     f.get('oi_chg'),
+        })
+
+    # ── Spreads: ICE RTD where available, outright-computed fallback ─────────
+    # Order: consecutive standard months, then front Dec/back Dec year spread.
+    rtd_spr = d.get('rtd_spreads', {})
+    spread_rows = []
+    seen_pairs  = set()
+
+    # Load spreads CSV — most recent row per contract for high/low/volume fallback
+    _spr_csv = {}
+    try:
+        with open(LOCAL_SPR_HISTORY, encoding='utf-8') as _sf:
+            for _sr in csv.DictReader(_sf):
+                _k = (_sr.get('contract') or '').strip()
+                _dt = (_sr.get('date') or '').strip()
+                if _k and _dt:
+                    if _k not in _spr_csv or _dt > _spr_csv[_k]['date']:
+                        _spr_csv[_k] = _sr
+    except Exception:
+        pass
+
+    def _computed_spread(near, far):
+        """Build a spread row from outright live_futures when RTD has no spread product."""
+        fn = lf.get(near, {}); ff = lf.get(far, {})
+        stt_n = fn.get('settle'); stt_f = ff.get('settle')
+        yst_n = fn.get('yest_settle'); yst_f = ff.get('yest_settle')
+        if stt_n is None or stt_f is None:
+            return None
+        stt  = round(stt_n - stt_f, 4)
+        yest = round(yst_n - yst_f, 4) if (yst_n is not None and yst_f is not None) else None
+        chg  = round(stt - yest, 4) if yest is not None else None
+        pct  = round(chg / yest * 100, 2) if (chg is not None and yest and yest != 0) else None
+        p_n = parse_ct_ticker(near); p_f = parse_ct_ticker(far)
+        disp = f"{MONTH_NAME[p_n[2]]}{str(p_n[1])[-2:]}/{MONTH_NAME[p_f[2]]}{str(p_f[1])[-2:]}" if p_n and p_f else f'{near}/{far}'
+        return {'display': disp, 'settle': stt, 'yest_settle': yest, 'change': chg,
+                'pct_chg': pct, 'high': None, 'low': None, 'volume': None,
+                'block_vol': None, 'efs_vol': None, 'efp_vol': None}
+
+    def _fv(v):
+        try: return float(v) if v not in (None, '') else None
+        except (ValueError, TypeError): return None
+
+    def _row_from_csv(key, near, far):
+        """Build a spread row entirely from CSV; returns None if key not in CSV."""
+        csv_r = _spr_csv.get(key)
+        if not csv_r:
+            return None
+        p_n = parse_ct_ticker(near); p_f = parse_ct_ticker(far)
+        disp = (f"{MONTH_NAME[p_n[2]]}{str(p_n[1])[-2:]}/{MONTH_NAME[p_f[2]]}{str(p_f[1])[-2:]}"
+                if p_n and p_f else key)
+        stt  = _fv(csv_r.get('settle'))
+        yest = _fv(csv_r.get('yest_settle'))
+        chg  = _fv(csv_r.get('change'))
+        pct  = round(chg / yest * 100, 2) if (chg is not None and yest and yest != 0) else None
+        return {
+            'display':    disp,
+            'settle':     stt,
+            'yest_settle': yest,
+            'change':     chg,
+            'pct_chg':    pct,
+            'high':       _fv(csv_r.get('high')),
+            'low':        _fv(csv_r.get('low')),
+            'volume':     _fv(csv_r.get('volume')),
+            'block_vol':  _fv(csv_r.get('block_vol')),
+            'efs_vol':    _fv(csv_r.get('efs_vol')),
+            'efp_vol':    _fv(csv_r.get('efp_vol')),
+        }
+
+    # Spread keys driven by what RTD and CSV actually contain — no synthetic
+    # consecutive-pair generation. Order: near-leg calendar, then far-leg.
+    # Dec/Dec year spread inserted immediately after the first Dec-near pair.
+    dec_contracts = sorted(
+        [t for t in lf if parse_ct_ticker(t) and parse_ct_ticker(t)[2] == 12],
+        key=_lf_sort_key
+    )
+    year_spread_key = (f'{dec_contracts[0]}/{dec_contracts[1]}'
+                       if len(dec_contracts) >= 2 else None)
+    year_spread_inserted = False
+
+    def _add_spread(key, near, far):
+        row = _row_from_csv(key, near, far)
+        if row is None:
+            if key in rtd_spr:
+                row = dict(rtd_spr[key])
+            else:
+                row = _computed_spread(near, far)
+        if row:
+            spread_rows.append(row)
+
+    def _spread_sort_key(key):
+        parts = key.split('/')
+        if len(parts) != 2:
+            return (9999, 99, 9999, 99)
+        pn = parse_ct_ticker(parts[0]); pf = parse_ct_ticker(parts[1])
+        return ((pn[1], pn[2]) if pn else (9999, 99)) + ((pf[1], pf[2]) if pf else (9999, 99))
+
+    def _has_excluded_leg(key):
+        for leg in key.split('/'):
+            p = parse_ct_ticker(leg)
+            if p and p[2] in CT_EXCLUDED_MONTHS:
+                return True
+        return False
+
+    all_spr_keys = sorted(
+        [k for k in (set(rtd_spr.keys()) | set(_spr_csv.keys()))
+         if not _has_excluded_leg(k)],
+        key=_spread_sort_key
+    )
+
+    for key in all_spr_keys:
+        if key in seen_pairs or key == year_spread_key:
+            continue
+        seen_pairs.add(key)
+        parts = key.split('/')
+        if len(parts) != 2:
+            continue
+        near, far = parts[0], parts[1]
+        _add_spread(key, near, far)
+        # Insert Dec/Dec year spread right after first row whose near leg is Dec
+        pn = parse_ct_ticker(near)
+        if (not year_spread_inserted and year_spread_key
+                and pn and pn[2] == 12
+                and year_spread_key not in seen_pairs):
+            seen_pairs.add(year_spread_key)
+            year_spread_inserted = True
+            yd = year_spread_key.split('/')
+            _add_spread(year_spread_key, yd[0], yd[1])
+
+    # ── Historical Volatility ─────────────────────────────────────────────────
+    hv_src = d.get('hv_data', {})
+    lbl_map = d.get('expiry_labels', {})
+    hv_rows = []
+    for tkr in std_tickers:
+        h = hv_src.get(tkr, {})
+        if any(h.get(f'hv{w}') for w in (10, 30, 60, 90)):
+            hv_rows.append({
+                'label': lbl_map.get(tkr, tkr),
+                'hv10':  h.get('hv10'),
+                'hv30':  h.get('hv30'),
+                'hv60':  h.get('hv60'),
+                'hv90':  h.get('hv90'),
+            })
+
+    return jsonify({
+        'date':      d.get('last_date'),
+        'time_et':   time_et,
+        'straddles': straddles,
+        'futures':   futures_rows,
+        'spreads':   spread_rows,
+        'hv':        hv_rows,
+    })
 
 
-_schedule_settle_fetch()
+@server.route('/api/watcher-status', methods=['GET'])
+def api_watcher_status():
+    """Check whether settle_watcher.py is currently running (via its lock file)."""
+    _lock = os.path.join(os.path.dirname(__file__), '..', 'Options_flow_analyzer', 'settle_watcher.lock')
+    _lock = os.path.normpath(_lock)
+    running = False
+    pid = None
+    if os.path.exists(_lock):
+        try:
+            with open(_lock) as f:
+                pid = int(f.read().strip())
+            # os.kill(pid, 0) always raises OSError on Windows (signal 0 unsupported).
+            # Use psutil when available; otherwise trust the lock file exists.
+            try:
+                import psutil
+                running = psutil.pid_exists(pid)
+            except ImportError:
+                running = True  # lock file present, assume live
+        except (OSError, ValueError):
+            running = False  # unreadable or stale lock
+    # Determine if we're in the settlement window (14:25–16:00 ET on a trading day)
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo as _ZI
+    _now = datetime.now(_ZI('America/New_York'))
+    _today_str = _now.strftime('%Y-%m-%d')
+    _in_window = (_is_ct_trading_day(_today_str)
+                  and (14, 25) <= (_now.hour, _now.minute) <= (16, 0))
+    # Both settled today → watcher has completed its job, no warning needed
+    _both_settled = False
+    try:
+        _sp = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+        with open(_sp, encoding='utf-8') as _sf:
+            _ss = json.load(_sf)
+        _both_settled = (_ss.get('date') == _today_str
+                         and bool(_ss.get('futures_settled'))
+                         and bool(_ss.get('options_settled')))
+    except Exception:
+        pass
+    return jsonify({'running': running, 'pid': pid, 'in_settle_window': _in_window,
+                    'both_settled': _both_settled})
+
+
+@server.route('/api/settle-status', methods=['GET'])
+def api_settle_status():
+    """Return settlement status written by settle_watcher.py.
+    Used by the dashboard frontend to auto-refresh and show the settlement banner."""
+    import json as _json
+    status_path = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+    if not os.path.exists(status_path):
+        return jsonify({'futures_settled': False, 'options_settled': False,
+                        'date': None, 'futures_time': None, 'options_time': None})
+    try:
+        with open(status_path, encoding='utf-8') as f:
+            return jsonify(_json.load(f))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@server.route('/push-to-vlm', methods=['POST'])
+def push_to_vlm():
+    """Proxy: forwards PNG + metadata to vlmdata.com server-side (avoids browser CORS)."""
+    _VLM_PUSH_URL    = 'https://vlmdata.com/api/analysis/push'
+    _VLM_PUSH_SECRET = '5c8b8dfb7aef367764d33aea1c19985a7907ae4198bc12be758a316acecabf7d'
+    try:
+        files = {}
+        data  = {}
+        if 'image' in request.files:
+            f = request.files['image']
+            files['image'] = (f.filename or 'export.png', f.read(), f.content_type or 'image/png')
+        for key in ('type', 'rows', 'data'):
+            if key in request.form:
+                data[key] = request.form[key]
+        resp = requests.post(_VLM_PUSH_URL,
+                             headers={'x-push-secret': _VLM_PUSH_SECRET},
+                             files=files, data=data, timeout=30)
+        return jsonify({}), resp.status_code
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+
+_schedule_preclose_flush()
+
+
+# ── Options Flow Pipeline ─────────────────────────────────────────────────────
+
+_FLOW_BASE = os.path.join(
+    os.path.dirname(__file__), '..', 'Options_flow_analyzer'
+)
+_FLOW_PROC = os.path.join(_FLOW_BASE, 'processed')
+
+
+def _flow_daily_path(date_str):
+    return os.path.join(_FLOW_PROC, date_str, 'enriched.csv')
+
+def _flow_legs_path(date_str):
+    return os.path.join(_FLOW_PROC, date_str, 'enriched_legs.json')
+
+def _flow_flags_path(date_str):
+    return os.path.join(_FLOW_PROC, date_str, 'flags.txt')
+
+def _flow_weekly_dir(week_ending):
+    return os.path.join(_FLOW_PROC, f'week-ending-{week_ending}')
+
+
+def _read_flow_csv(path):
+    """Read an enriched.csv or strike_flow_weekly.csv into a list of dicts."""
+    if not os.path.exists(path):
+        return []
+    with open(path, newline='', encoding='utf-8') as fh:
+        return list(csv.DictReader(fh))
+
+
+def _coerce_flow_row(row):
+    """Type-coerce string fields from the CSV into native Python types."""
+    for int_field in ('qty', 'blk_vol', 'exch_vol'):
+        if row.get(int_field) not in (None, ''):
+            try:
+                row[int_field] = int(row[int_field])
+            except (ValueError, TypeError):
+                row[int_field] = None
+    for float_field in ('price_lo', 'price_hi', 'underlying_lo', 'underlying_hi',
+                        'high', 'low', 'prev_settle'):
+        if row.get(float_field) not in (None, ''):
+            try:
+                row[float_field] = float(row[float_field])
+            except (ValueError, TypeError):
+                row[float_field] = None
+    if row.get('enrichment_match') not in (None, ''):
+        row['enrichment_match'] = str(row['enrichment_match']).lower() == 'true'
+    return row
+
+
+@server.route('/api/flow/daily')
+def api_flow_daily():
+    """
+    Return enriched flow rows for a single trading day.
+
+    Query params:
+        date      YYYY-MM-DD (required)
+        commodity CT (default, reserved for future multi-commodity support)
+
+    Response:
+        {
+          date: str,
+          rows: [...],          # enriched.csv rows, types coerced
+          flags: [...],         # flags.txt lines
+          legs_available: bool  # whether enriched_legs.json exists
+        }
+    """
+    date_str  = request.args.get('date', '')
+    if not date_str:
+        return jsonify({'error': 'date parameter required (YYYY-MM-DD)'}), 400
+
+    csv_path   = _flow_daily_path(date_str)
+    flags_path = _flow_flags_path(date_str)
+    legs_path  = _flow_legs_path(date_str)
+
+    rows = [_coerce_flow_row(r) for r in _read_flow_csv(csv_path)]
+
+    flags = []
+    if os.path.exists(flags_path):
+        with open(flags_path, encoding='utf-8') as fh:
+            flags = [l.rstrip('\n') for l in fh if l.strip()]
+
+    return _no_cache(jsonify({
+        'date':           date_str,
+        'rows':           rows,
+        'flags':          flags,
+        'legs_available': os.path.exists(legs_path),
+    }))
+
+
+@server.route('/api/flow/weekly')
+def api_flow_weekly():
+    """
+    Return aggregated weekly flow data.
+
+    Query params:
+        week_ending  YYYY-MM-DD Friday date (required)
+
+    Response:
+        {
+          week_ending: str,
+          rows:        [...],   # weekly_enriched.csv rows
+          strike_rows: [...],   # strike_flow_weekly.csv rows
+          flags:       [...]    # flags.txt lines
+        }
+    """
+    week_ending = request.args.get('week_ending', '')
+    if not week_ending:
+        return jsonify({'error': 'week_ending parameter required (YYYY-MM-DD)'}), 400
+
+    week_dir     = _flow_weekly_dir(week_ending)
+    enriched_csv = os.path.join(week_dir, 'weekly_enriched.csv')
+    strike_csv   = os.path.join(week_dir, 'strike_flow_weekly.csv')
+    flags_file   = os.path.join(week_dir, 'flags.txt')
+
+    rows        = [_coerce_flow_row(r) for r in _read_flow_csv(enriched_csv)]
+    strike_rows = _read_flow_csv(strike_csv)   # strike rows stay as strings (all numeric)
+
+    for sr in strike_rows:
+        for f in ('strike', 'total_contracts', 'trade_count'):
+            if sr.get(f) not in (None, ''):
+                try:
+                    sr[f] = float(sr[f]) if f == 'strike' else int(sr[f])
+                except (ValueError, TypeError):
+                    pass
+
+    flags = []
+    if os.path.exists(flags_file):
+        with open(flags_file, encoding='utf-8') as fh:
+            flags = [l.rstrip('\n') for l in fh if l.strip()]
+
+    return _no_cache(jsonify({
+        'week_ending': week_ending,
+        'rows':        rows,
+        'strike_rows': strike_rows,
+        'flags':       flags,
+    }))
+
 
 if __name__ == '__main__':
     server.run(debug=True, port=5050, use_reloader=True, reloader_type='stat')

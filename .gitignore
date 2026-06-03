@@ -13,3 +13,13 @@ build/
 local_*.csv
 *.BACKUP.csv
 *.bak
+*.bak_repair
+
+# Runtime state — machine-specific, never commit
+settle_status.json
+bloomberg_backup/
+ERRORS.md
+
+# Claude Code internal
+.claude/
+restart_server.py

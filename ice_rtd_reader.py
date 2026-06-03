@@ -77,24 +77,35 @@ _CODE_MON = {v: k for k, v in _MON_CODE.items()}
 _C_BID    =  1
 _C_OFFER  =  2
 _C_LAST   =  4
+_C_VOL    =  5   # call exchange volume (used by options-flow pipeline)
+_C_BLOCK  =  6   # call block volume    (used by options-flow pipeline)
 _C_SETTLE =  7
 _C_OI     =  8
 _STRIKE   =  9
 _P_BID    = 11
 _P_OFFER  = 12
 _P_LAST   = 14
+_P_VOL    = 15   # put exchange volume  (used by options-flow pipeline)
+_P_BLOCK  = 16   # put block volume     (used by options-flow pipeline)
 _P_SETTLE = 17
 _P_OI     = 18
 
-# ── Futures sheet fallback column positions (confirmed from workbook inspection)
+# ── Futures sheet column positions (confirmed 2026-05-27 from live workbook inspection)
 _FUT_COLS = {
     'Strip':        2,
     'bid':          6,
     'offer':        7,
     'Last Price':   9,
-    'Settle':       17,
+    'Vol':         13,
+    'High':        14,
+    'Low':         15,
+    'Settle':      17,
+    'Change':      18,
     'Market State': 19,
-    'OI':           46,
+    'Block Vol':   34,
+    'EFS Vol':     35,
+    'EFP Vol':     36,
+    'OI':          46,
 }
 
 
@@ -277,8 +288,15 @@ def read_futures(wb, prefix='CT'):
 
     col_strip  = _col('Strip',        _FUT_COLS['Strip'])
     col_last   = _col('Last Price',   _FUT_COLS['Last Price'])
+    col_vol    = _col('Vol',          _FUT_COLS['Vol'])
+    col_high   = _col('High',         _FUT_COLS['High'])
+    col_low    = _col('Low',          _FUT_COLS['Low'])
     col_settle = _col('Settle',       _FUT_COLS['Settle'])
+    col_change = _col('Change',       _FUT_COLS['Change'])
     col_mstate = _col('Market State', _FUT_COLS['Market State'])
+    col_block  = _col('Block Vol',    _FUT_COLS['Block Vol'])
+    col_efs    = _col('EFS Vol',      _FUT_COLS['EFS Vol'])
+    col_efp    = _col('EFP Vol',      _FUT_COLS['EFP Vol'])
     col_oi     = _col('OI',           _FUT_COLS['OI'])
     col_bid    = _FUT_COLS['bid']
     col_offer  = _FUT_COLS['offer']
@@ -303,13 +321,97 @@ def read_futures(wb, prefix='CT'):
         if contract in result:
             continue
 
+        stt = _safe_float(row[col_settle]) if len(row) > col_settle else None
+        chg = _safe_float(row[col_change]) if len(row) > col_change else None
+        yest = round(stt - chg, 4) if (stt is not None and chg is not None) else None
+        pct  = round(chg / yest * 100, 2) if (chg is not None and yest and yest != 0) else None
+
         result[contract] = {
-            'settle':       _safe_float(row[col_settle]) if len(row) > col_settle else None,
+            'settle':       stt,
             'last':         _safe_float(row[col_last])   if len(row) > col_last   else None,
             'bid':          _safe_float(row[col_bid])    if len(row) > col_bid    else None,
             'offer':        _safe_float(row[col_offer])  if len(row) > col_offer  else None,
+            'volume':       _safe_float(row[col_vol])    if len(row) > col_vol    else None,
+            'high':         _safe_float(row[col_high])   if len(row) > col_high   else None,
+            'low':          _safe_float(row[col_low])    if len(row) > col_low    else None,
+            'change':       chg,
+            'pct_chg':      pct,
+            'yest_settle':  yest,
+            'block_vol':    _safe_float(row[col_block])  if len(row) > col_block  else None,
+            'efs_vol':      _safe_float(row[col_efs])    if len(row) > col_efs    else None,
+            'efp_vol':      _safe_float(row[col_efp])    if len(row) > col_efp    else None,
             'oi':           _safe_float(row[col_oi])     if len(row) > col_oi     else None,
             'market_state': str(row[col_mstate]).strip() if len(row) > col_mstate and row[col_mstate] else None,
+        }
+
+    return result
+
+
+def read_spreads(wb, prefix='CT'):
+    """
+    Reads calendar spread rows ('Cotton No. 2 Spr') from the '[PREFIX] Futures' sheet.
+    Returns dict keyed by contract pair e.g. 'CTN6/CTZ6'.
+    Skips TAS spreads.
+    """
+    sheet_name = f'{prefix.upper()} Futures'
+    sh = None
+    try:
+        sh = wb.sheets[sheet_name]
+    except Exception:
+        for s in wb.sheets:
+            if s.name.strip().lower() == sheet_name.lower():
+                sh = s
+                break
+    if sh is None:
+        return {}
+
+    data = sh.used_range.value
+    if not data or len(data) < 2:
+        return {}
+
+    result = {}
+    for row in data[1:]:
+        if not row or len(row) <= _FUT_COLS['Settle']:
+            continue
+        product = str(row[0]).strip() if row[0] else ''
+        if 'Spr' not in product or 'TAS' in product:
+            continue
+
+        strip_val = row[_FUT_COLS['Strip']] if len(row) > _FUT_COLS['Strip'] else None
+        if not strip_val or '/' not in str(strip_val):
+            continue
+
+        parts = str(strip_val).strip().split('/')
+        if len(parts) != 2:
+            continue
+
+        leg1 = _strip_to_contract(parts[0].strip(), prefix)
+        leg2 = _strip_to_contract(parts[1].strip(), prefix)
+        if not leg1 or not leg2:
+            continue
+
+        key = f'{leg1}/{leg2}'
+        if key in result:
+            continue
+
+        stt = _safe_float(row[_FUT_COLS['Settle']]) if len(row) > _FUT_COLS['Settle'] else None
+        chg = _safe_float(row[_FUT_COLS['Change']]) if len(row) > _FUT_COLS['Change'] else None
+        yest = round(stt - chg, 4) if (stt is not None and chg is not None) else None
+        pct  = round(chg / yest * 100, 2) if (chg is not None and yest and yest != 0) else None
+
+        result[key] = {
+            'display':    f"{parts[0].strip()}/{parts[1].strip()}",
+            'settle':     stt,
+            'last':       _safe_float(row[_FUT_COLS['Last Price']]) if len(row) > _FUT_COLS['Last Price'] else None,
+            'change':     chg,
+            'pct_chg':    pct,
+            'yest_settle': yest,
+            'high':       _safe_float(row[_FUT_COLS['High']])      if len(row) > _FUT_COLS['High']      else None,
+            'low':        _safe_float(row[_FUT_COLS['Low']])       if len(row) > _FUT_COLS['Low']       else None,
+            'volume':     _safe_float(row[_FUT_COLS['Vol']])        if len(row) > _FUT_COLS['Vol']       else None,
+            'block_vol':  _safe_float(row[_FUT_COLS['Block Vol']]) if len(row) > _FUT_COLS['Block Vol'] else None,
+            'efs_vol':    _safe_float(row[_FUT_COLS['EFS Vol']])   if len(row) > _FUT_COLS['EFS Vol']   else None,
+            'efp_vol':    _safe_float(row[_FUT_COLS['EFP Vol']])   if len(row) > _FUT_COLS['EFP Vol']   else None,
         }
 
     return result
@@ -346,11 +448,15 @@ def read_options(wb, sheet_name):
             'call_bid':    _safe_float(row[_C_BID]),
             'call_offer':  _safe_float(row[_C_OFFER]),
             'call_last':   _safe_float(row[_C_LAST]),
+            'call_vol':    _safe_float(row[_C_VOL])    if len(row) > _C_VOL    else None,
+            'call_block':  _safe_float(row[_C_BLOCK])  if len(row) > _C_BLOCK  else None,
             'call_settle': _safe_float(row[_C_SETTLE]),
             'call_oi':     _safe_float(row[_C_OI]),
             'put_bid':     _safe_float(row[_P_BID]),
             'put_offer':   _safe_float(row[_P_OFFER]),
             'put_last':    _safe_float(row[_P_LAST]),
+            'put_vol':     _safe_float(row[_P_VOL])    if len(row) > _P_VOL    else None,
+            'put_block':   _safe_float(row[_P_BLOCK])  if len(row) > _P_BLOCK  else None,
             'put_settle':  _safe_float(row[_P_SETTLE]),
             'put_oi':      _safe_float(row[_P_OI]),
         })
@@ -438,6 +544,7 @@ def _read_ice_workbook_inner(commodity='CT', stored_atm_settle=None):
 
     prefix  = commodity.upper()
     futures = read_futures(wb, prefix)
+    spreads = read_spreads(wb, prefix)
 
     option_sheets = get_option_sheets(wb, prefix)
     options = {}
@@ -451,5 +558,6 @@ def _read_ice_workbook_inner(commodity='CT', stored_atm_settle=None):
     return {
         'mode':    mode,
         'futures': futures,
+        'spreads': spreads,
         'options': options,
     }

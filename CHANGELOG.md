@@ -2,6 +2,439 @@
 
 ---
 
+## SINGLE-PROTOCOL SETTLEMENT — full cross-system implementation complete (2026-06-01)
+
+### [arch] settle_watcher.py is sole authority on all settlements — both systems confirmed
+
+**Rule:** `settle_watcher.py` (Options_flow_analyzer/) detects, writes, and signals all settlements.
+No other process touches COM during 14:25–16:00 ET. No other process writes to shared CSVs
+during the trading session. All consumers wait for `settle_status.json → options_settled: true`.
+
+**Dashboard side (app.py):**
+- `_in_ct_settle_window()` blocks all four `read_ice_workbook()` call sites during 14:25–16:00 ET
+- `_auto_persist()` restricted to cold-start after 16:30 ET when settle_watcher did not run
+- `LOCAL_OPT_HIST` NameError fixed → `LOCAL_OPT_HISTORY` (line 668, `_csv_opt_settle` now loads correctly)
+
+**Flow analyzer side:**
+- `flow_watcher.py`: five COM functions deleted (`_read_rtd_current`, `_bootstrap_baseline`,
+  `_load_prior`, `_detect_settlement`, `_try_snapshot`). Settlement detection replaced with
+  `_read_options_settled()` polling `settle_status.json` every 5 minutes. Zero COM access.
+- `price_tape.py`: `_in_settle_window()` COM pause 14:25–16:00 ET live (was already written)
+- `iv_snapshot.py`: `build_enriched_iv()` gates on `options_settled: true` before reading
+  `local_options_history.csv` — prevents partial read during settle_watcher's delete-then-append
+- `weekly_brief_runner.py`: settle check upgraded from warning to hard block (CompletenessCheckError);
+  checks `options_settled` not just `futures_settled`
+
+Both scheduled tasks restarted and confirmed Ready. First live test: 2026-06-02 settlement window.
+
+---
+
+## COM COLLISION FIX — all processes yield ICE COM to settle_watcher 14:25–16:00 ET (2026-06-01)
+
+### [fix] price_tape.py pauses COM reads during settlement window
+
+**File:** `Options_flow_analyzer/price_tape.py`
+
+`price_tape.py` runs from 05:30 AM to 15:30 ET, polling `read_ice_workbook()` every 20
+seconds. During 14:25–15:30, it fired ~65 COM reads straight through the settlement
+detection window — the primary source of `Call was rejected by callee` errors that
+bounced settle_watcher off the workbook and caused `options=no` to persist for hours.
+
+**Fix:** Added `_in_settle_window()` helper and a pause block in the main loop. During
+14:25–16:00 ET the loop sleeps instead of polling, logs `SETTLE_WINDOW: pausing` once
+on entry and `SETTLE_WINDOW: ended - resuming` on exit. settle_watcher has zero
+competition for COM during its detection window.
+
+## COM COLLISION FIX — dashboard yields ICE COM to settle_watcher during settlement window (2026-06-01)
+
+### [fix] Dashboard stops calling read_ice_workbook() during 14:25–16:00 ET
+
+**File:** `app.py` (new `_in_ct_settle_window()` helper + guards at lines ~580 and ~1452)
+
+**Root cause:** Both the dashboard (`load_data()` on every `/api/data` request, ~3 min cycle)
+and `settle_watcher.py` called `ice_rtd_reader.read_ice_workbook('CT')` through Excel's
+single-threaded COM interface. When they collided, Excel rejected one caller with
+`Call was rejected by callee` or `NoneType has no attribute 'UsedRange'`. This forced
+settle_watcher to retry after 180s — causing repeated missed settlement detection windows
+and the observed `futures=YES options=no` state persisting far past expected settlement time.
+
+**Fix:** Added `_in_ct_settle_window()` — returns True during 14:25–16:00 ET on CT trading
+days. Both COM call sites in `load_data()` now check this flag and skip the workbook read
+entirely during that window. The dashboard falls back to `_flow_rtd_opts` (flow_rtd.json)
+and B76 theoretical for straddle values. settle_watcher has exclusive COM access during
+the settlement detection period.
+
+**One settlement process:** settle_watcher.py is the sole settlement detection + persistence
+process. The dashboard is read-only during the window.
+
+---
+
+## CONFLICT AUDIT — app.py CSV write isolation (2026-06-01)
+
+### [fix] _auto_persist() restricted to cold-start bootstrap only
+
+**File:** `app.py` (~line 1714)
+
+`_auto_persist()` previously fired on every `/api/data` request during trading hours,
+writing to `local_options_history.csv` and `local_futures_history.csv` via
+`_persist_ct_options_ice()` and `_persist_futures_ice()`. This violated the rule that
+`settle_watcher.py` is the sole writer to those files.
+
+**Fix:** Added cold-start guard. Auto-persist now runs only when ALL are true:
+1. Current ET time is after 16:30 (settle_watcher hard stop + buffer)
+2. `settle_status.json` does not exist or shows a prior date (settle_watcher did not run)
+3. ICE workbook has contracts not in the CSV
+
+During trading hours the guard always suppresses the thread launch.
+
+### [fix] _csv_opt_settle parser handles both security_des formats
+
+**File:** `app.py` (~line 642)
+
+The parser previously required the embedded `security_des` format (`CTN6P    75`) written
+by `settle_watcher`. Rows written by `_persist_ct_options_ice` use a short format
+(`CTN6P`) with strike in the separate `strike_px` column — these were silently skipped,
+making the CSV settle fallback unreliable for cold-start rows.
+
+**Fix:** Parser now uses `strike_px` column as primary strike source; falls back to
+parsing embedded format only when `strike_px` is empty. Both formats now populate
+`_csv_opt_settle` correctly.
+
+---
+
+## SETTLEMENT PIPELINE REBUILD + EOD EMAIL COMPLETE (2026-05-28)
+
+### [arch] New master settlement detection process — settle_watcher.py
+
+**Files changed:**
+- `Options_flow_analyzer/settle_watcher.py` — complete rewrite (was unused old version)
+- `Options_flow_analyzer/settle_watcher.bat` — new Task Scheduler trigger
+- `Options_flow_analyzer/SETTLEMENT_PIPELINE.md` — full handoff document
+- `ct-options-dashboard/app.py` — removed `_persist_ice_all()`, scheduled fetch timer; added `/api/settle-status`
+- `ct-options-dashboard/templates/index.html` — auto-poll + dismissible settlement banner
+- `ct-options-dashboard/local_futures_history.csv` — schema expanded, bbg_ticker removed
+- `ct-options-dashboard/local_futures_spreads_history.csv` — new file
+
+**Architecture:**
+`settle_watcher.py` is the single owner of settlement persistence. It runs daily
+from 14:25 ET, polls ICE RTD FEED CT.xlsx every 3 minutes, and detects settlement
+when the `Settle` column changes by ≥ 0.01 from the prior CSV row.
+
+**The Settle column rule:** It is static during the session (= yesterday's settlement).
+It updates once ICE publishes today's settlement (~14:30 ET futures, ~14:45 ET options).
+This is the detection signal.
+
+**On futures settlement:** writes `local_futures_history.csv`, `local_futures_spreads_history.csv`, `flow_rtd.json`, updates `settle_status.json`.
+**On options settlement:** writes `local_options_history.csv`, updates `settle_status.json`.
+**Hard stop:** 16:00 ET.
+
+**Two-watcher distinction:**
+- `settle_watcher.py` → settlement detection + CSV writes + dashboard notification
+- `outlook_watcher.py` → Gmail flow email watcher + options flow analysis pipeline (separate, independent)
+
+**CSV schema (futures):**
+`date, commodity, contract, settle, yest_settle, change, high, low, volume, efp_vol, efs_vol, block_vol, open_int, oi_chg, first_notice, last_trade`
+
+**CSV schema (spreads — new file):**
+`date, commodity, contract, settle, yest_settle, change, high, low, volume, efp_vol, efs_vol, block_vol`
+
+**Computed at write time:** `yest_settle` = prior CSV row; `change` = settle − yest_settle; `oi_chg` = oi − prev_oi.
+
+**Dashboard integration:**
+- `/api/settle-status` endpoint reads `settle_status.json`
+- Frontend polls every 60s; auto-reloads data + shows dismissible gold banner on settlement
+- `_ld_cache` invalidates on CSV file mtime change → fresh data on next refresh
+
+**EOD email chain (complete):**
+settle_watcher writes CSVs → `_ld_cache` invalidates → `D` reloads fresh →
+user clicks EOD button → `_buildEodData()` assembles from `D` →
+all fields populated (straddles, futures, spreads, HV) → canvas PNG → push/email.
+
+**Removed from app.py:**
+`_persist_ice_all()`, `_schedule_settle_fetch()`, `_run_scheduled_fetch()`,
+`SETTLE_FETCH_HOUR/MINUTE`, `/api/fetch-settles` route.
+
+**Kept:** `_persist_today()` GitHub backup fetch, `_schedule_preclose_flush()`.
+
+**Known data issue (2026-05-28):**
+Corrupt row (Bloomberg ticker in date col) blocked CSV updates for months.
+May 27 futures data was missing — manually inserted correct ICE values.
+Resolved going forward by settle_watcher.
+
+---
+
+## ICE RTD CHANGE/SETTLE/YEST_SETTLE FIX + EOD EMAIL BRANDING (2026-05-28)
+
+### [⚠️] Futures `yest_settle` and `change` were wrong — root cause: RTD `Change` col is last-trade based
+**Files:** `app.py` (live_futures + rtd_spreads override), `templates/index.html` (_buildEodData)
+
+**Root cause — three distinct layers:**
+
+**Layer 1 — ICE RTD `Change` column (col S) is last-trade based, not settle-to-settle.**  
+`Change = last_trade − S_{t−1}` where `S_{t−1}` is ICE's internal reference (approximately
+yesterday's settle but NOT the official published settlement). The formula
+`yest_settle = settle − change` therefore gives a wrong `yest_settle`.  
+Example: CTZ6 settle=76.16, Change=−1.09 (last-trade based) → computed yest_settle=77.25,
+but correct yest_settle=77.37.
+
+**Layer 2 — ICE RTD `settle` column bug (ICE's bug, fixed by ICE support 2026-05-27).**  
+Before ICE's fix the `settle` column showed *yesterday's* settlement price, not today's.
+After their fix `settle` = today's published settlement. This was a server-side ICE bug;
+no code change needed once they fixed it.
+
+**Layer 3 — Pre-settlement vs post-settlement distinction.**  
+Before today's CT session settles (~3 PM ET), RTD `settle` still holds yesterday's
+published settlement. Using `change = settle − csv_yest_settle` therefore gives `0` because
+both values are yesterday's settle. The correct intraday change is `last − csv_yest_settle`.
+
+**Fixes applied:**
+
+1. **`app.py` — build `csv_prev_settle`** after `fut_lookup`. Reads `ct_fut` rows for
+   `prev_date` (the trading day before `last_date`) to get yesterday's official settlement for
+   each contract, keyed by `(month_num, year)` — same key scheme as `fut_lookup`.
+
+2. **`app.py` — `yest_src` selection:** if `last_date == today` (settlement already fetched),
+   use `csv_prev_settle`; else use `fut_lookup` values (which already hold yesterday's settle).
+
+3. **`app.py` — `live_futures` override (outrights):** after RTD read, override `yest_settle`
+   from `yest_src`; compute `change = last − yest_settle` (NOT `settle − yest_settle`).
+   Using `last` is correct for intraday display; `settle` = yesterday's value pre-settlement.
+
+4. **`app.py` — `rtd_spreads` override:** same pattern — override `yest_settle` from near/far
+   outright yest_settle difference; recompute `change` and `pct_chg`.
+
+5. **`index.html` — EOD canvas (`_buildEodData`):** computes `change = settle − yest_settle`
+   directly for both futures rows and RTD spread rows (settle-to-settle for EOD email).
+   Does NOT use the `change` field from `live_futures`, which is intraday last-trade based.
+
+**Rule to remember:**
+- Live ticker / tab display → `change = last − yest_settle` (intraday move from yesterday close)
+- EOD email → `change = settle − yest_settle` (settle-to-settle, computed client-side)
+- Never use RTD `Change` col as-is for either; always recompute from `csv_yest_settle`.
+
+---
+
+### [⚠️] Straddle `Settlement` column wrong — CSV `px_settle` has stale/wrong values
+**File:** `app.py` — CT straddle loop, `prev_c`/`prev_p` lookup (~line 1361)
+
+**Root cause:** The straddle settlement straddle was computed from `ct_opts` CSV rows
+(`px_settle` field) at `settle_ref = last_date`. The CSV can be stale or hold prices that
+don't match ICE's official published option settlements. The RTD options sheet carries
+`call_settle`/`put_settle` fields that are always current and confirmed correct.
+
+**Fix:** Swap priority — try RTD `atm_row.call_settle` / `atm_row.put_settle` first;
+fall back to CSV `px_settle` only when RTD has no data for that contract.
+
+**Rule:** RTD option settle fields are authoritative. CSV is backup only.
+
+---
+
+### [fix] Spread year labels showing `Mar07/May07` instead of `Mar27/May27`
+**File:** `templates/index.html` — `parseTkr()` inside `_buildEodData()`
+
+**Root cause:** ICE tickers use single-digit years (`CTH7` = Mar 2027). `parseInt('7') = 7`.
+The old pivot `yy >= 30 ? 1900+yy : 2000+yy` gave `2000+7 = 2007`. Python's
+`parse_ct_ticker` already uses `2020 + year_digit` — JS was inconsistent.
+
+**Fix:** `yy < 10 → 2020 + yy` added as the first branch in the year resolution chain,
+matching `parse_ct_ticker` exactly.
+
+---
+
+### [feat] EOD Email PNG — VLM brand palette applied to all exports
+**Files:** `templates/index.html` — `exportStraddlePanel()`, `_buildEodCanvas()`,
+and all surface/smile/skew export functions.
+
+All PNG exports now share a single palette:
+- Header background: `#1a1a2e` (dark navy, matches COT report)
+- Title accent: `#E8C547` (VLM gold, matches COT report)
+- Column bar: `#2c3e50`
+- Positive: `#15803d` | Negative: `#b91c1c`
+- Gold accent strip (4 px) separates header from body
+- VLM footer bar on all exports
+
+Previously each export had its own ad-hoc colours (`#0f1923`, `#c9a227`, `#1a3a6e`, `#2b63b8`).
+
+---
+
+## PUSH TO SITE — FLASK PROXY FIX (2026-05-26)
+
+### [fix] "Failed to fetch" CORS error on PUSH TO SITE button
+**Files:** `app.py` (new route), `templates/index.html` (JS URL + header)  
+**Root cause:** Browser at `http://127.0.0.1:15050` cannot POST directly to `https://vlmdata.com`
+— browsers block cross-origin requests unless CORS headers are present on the remote server.
+
+**Fix:**
+- Added Flask route `POST /push-to-vlm` in `app.py` — receives multipart form data from
+  the browser and forwards it to `https://vlmdata.com/api/analysis/push` server-side using
+  `requests`, injecting the `x-push-secret` header. Secret never leaves the server.
+- JS `_PUSH_URL` changed from the external URL to `'/push-to-vlm'` (same-origin).
+- `x-push-secret` header removed from JS `fetch()` call entirely.
+
+---
+
+## SETTLEMENT IV T_SETTLE ROOT-CAUSE FIX (2026-05-26)
+
+### [⚠️] % CHG ON DAY showed wrong sign — e.g. CTN6 −1.26 when vol was actually UP
+**File:** `app.py` — straddle loop, `_actual_settle_str` block (~line 1155)
+**Root cause (confirmed by exact reproduction):**
+The GitHub options CSV is published **one business day late** — the rows stored under
+`last_date` in `local_options_history.csv` contain the **previous trading session's**
+settlement prices, but the date label is TODAY (the publication date).
+For example, on May 26 the CSV has rows labeled `2026-05-26` that hold May 22 settlement
+prices (call=1.81, put=2.39 at K=78 for CTN6).  
+`last_date = '2026-05-26'` → `T_settle = (Jun 12 − May 26)/365 = 17/365`.  
+But the settlement was actually priced when DTE = 21 (May 22 → Jun 12).  
+Using 17/365 instead of 21/365 inflates `settle_IV` from 28.15% to 31.27%,
+giving `% CHG = 30.01 − 31.27 = −1.26` — wrong sign, wrong magnitude.
+
+**Exact parameter reproduction confirming the bug:**
+| fwd_settle | T_settle | settle_IV | % CHG |
+|---|---|---|---|
+| 77.42 (ICE RTD ✓) | 17/365 (bug) | 31.27% | **−1.26** |
+| 77.42 (ICE RTD ✓) | 21/365 (fix) | 28.15% | **+1.86** |
+
+**Fix:** Before the straddle loop, compute `_actual_settle_str` = the last CT trading day
+before today by walking back from yesterday using `_is_ct_trading_day()`:
+```python
+_prev_day = datetime.now() - timedelta(days=1)
+while not _is_ct_trading_day(_prev_day.strftime('%Y-%m-%d')):
+    _prev_day -= timedelta(days=1)
+_actual_settle_str = _prev_day.strftime('%Y-%m-%d')
+```
+`T_settle` now uses `_actual_settle_str` instead of `last_date`. On May 26 this gives
+`_actual_settle_str = '2026-05-22'` → T_settle = 21/365 → CHG = +1.86 ✓.
+
+**Why it cannot revert:** The computation is dynamic — it always finds the correct prior
+trading day regardless of what date labels the GitHub CSV uses, including future holidays.
+The `_is_ct_trading_day()` function already holds the full 2026 ICE holiday calendar.
+
+**Supersedes:** The earlier fix in "STRADDLE VOL-CHANGE T-MISMATCH FIX" that used
+`T_settle from last_date` was incomplete — it only worked correctly when `last_date`
+happened to equal the actual settlement date (which it never does intraday).
+
+---
+
+## STRADDLE TWO-VOL + SERIAL ATM FIXES (2026-05-26)
+
+### [⚠️] Vol Smile overlay T-mismatch → two different IVs for same contract
+**File:** `app.py` — live smile overlay loop (~line 1002)
+**Root cause:** The Vol Smile live overlay used `get_dte(ticker, last_date)` for its T, giving
+21/365 (May 22 → Jun 12). The straddle loop (fixed earlier) uses today's actual T = 17/365.
+Same straddle price back-calculated at two different T values → two different IVs on screen
+(27.4% header vs 30.39% table for CTN6).
+**Fix:** Changed to `get_dte(ticker, datetime.now().strftime('%Y-%m-%d'))` so the live overlay
+T always reflects today's actual DTE, matching the straddle table.
+
+### [⚠️] Serial month ATM strike wrong (CTU6 showing 79, should be 80)
+**File:** `app.py` — CT straddle loop, serial month branch (~line 1228)
+**Root cause:** `atm` is selected before the serial month branch runs, using the stale
+`futures.get('CTU6')` forward (~79.X from May 22 CSV). `std_fwd` (live CTZ6 = 80.28) is
+computed inside the branch but `atm` was never updated from the stale value.
+**Fix:** After establishing `std_fwd`, re-derive `atm` using the official rounding rule
+(fractional ≥ 0.50 → ceil/upper, < 0.50 → floor/lower). Also refreshes `atm_row` so the
+settlement fallback uses the correct strike row. CTZ6 at 80.28 → .28 < .50 → ATM = 80 ✓.
+**Rule:** This rounding rule is applied only in the serial month branch because standard months
+use nearest-chain-strike which gives the same result for $1-interval chains.
+
+---
+
+## STRADDLE VOL-CHANGE T-MISMATCH FIX (2026-05-26)
+
+### [⚠️] Straddle % CHG on Day — Wrong T in Settlement IV Back-Calculation
+**File:** `app.py` — CT straddle loop, `_persist_ice_all()`
+**Root cause (two-part):**
+1. `_persist_ice_all()` ran on Memorial Day (May 25, ICE closed) and wrote 478 option rows +
+   10 futures rows dated `2026-05-25` that contained unchanged May 22 Friday settlement prices.
+   This made `last_date = '2026-05-25'`, so DTE was computed as 18 (Jun 12 − May 25) instead
+   of the correct 21 (Jun 12 − May 22 when the prices were actually set).
+2. The straddle loop used the same `T = (lt − last_date).days / 365` for BOTH the live IV and
+   the settlement IV back-calculation, so neither was computed with the correct DTE.
+**Impact on CTN6 (Jul 26, 18 DTE):** settle IV inflated by √(21/18) = 1.08 → showed −0.57
+vol pts when vol actually went UP from Friday. Short-dated contracts most affected.
+**Fixes applied:**
+- Added `_ICE_CT_CLOSED` (2026 ICE Cotton holiday set) and `_is_ct_trading_day()`.
+- `_persist_ice_all()` now skips entirely on weekends and ICE holidays — prevents bad date rows.
+- Straddle loop now computes `T` from `datetime.now()` (correct DTE for live IV) and
+  `T_settle` from `last_date` (correct DTE for settlement IV back-calculation) independently.
+- Deleted the 488 stale May 25 rows from both local CSVs.
+**DO NOT** revert to a single `T` for both live and settlement IV — that will re-introduce the
+multi-day-gap error on any day before the 3:45 PM fetch updates `last_date`.
+
+---
+
+## STRADDLE & PNG FIXES (2026-05-22)
+
+### [⚠️] CT Serial Month Straddles — Live B76 Value (CTU6, CTX6, CTF7, etc.)
+**File:** `app.py` — CT straddle loop (~line 1188)
+**Root cause:** Serial CT months (Aug/Sep/Nov/Jan/Feb/Apr/Jun) have no dedicated futures contract.
+Their ICE RTD option strips contain frozen `call_settle`/`put_settle` values; the old code used
+these as `val`, so the displayed straddle value never moved intraday (Change = 0 all day).
+**Fix:** Added an `if month_num not in CT_STANDARD_MONTHS:` branch that runs BEFORE the
+`today_c/today_p` check. This path always uses B76 with the underlying standard month's live
+IV (`atm_iv[std_tkr]`) and live forward (bid/ask mid → last → settle fallback from ICE RTD
+futures row). `val` therefore moves with the market during the session.
+Last-resort fallback: if `std_iv` or `std_fwd` are unavailable, uses frozen settle prices.
+**Affected months:** CTU6 (Sep26→Dec26), CTX6 (Nov26→Dec26), CTF7 (Jan27→Mar27), etc.
+**DO NOT** move the `CT_STANDARD_MONTHS` check below the `today_c/today_p` check — serial months
+will silently revert to frozen settlement values.
+
+### [✅] atm_row UnboundLocalError — Fixed
+**File:** `app.py` — CT straddle loop (~line 1158)
+**Root cause:** `atm_row` was only assigned inside `if fwd and ice_chain:`, not in the `elif fwd:` branch.
+Accessing it at line 1241 (`if prev_c is None and atm_row:`) crashed the server.
+**Fix:** Added `atm_row = None` unconditionally before the `if fwd and ice_chain:` block.
+
+### [✅] CTU7 / CTX7 (Sep27, Nov27) Removed from CT Straddle Display
+**File:** `app.py` — CT straddle loop (~line 1132)
+**Change:** `straddle_tickers = [t for t in straddle_tickers if t not in {'CTU7', 'CTX7'}]`
+**Why:** Illiquid; including them added rows with unreliable values. Re-add when liquidity warrants.
+
+### [✅] `_ice_to_rtd_shape` — call_settle/put_settle Passed Through
+**File:** `app.py` — `_ice_to_rtd_shape()` (~line 483)
+**Root cause:** The adapter that converts the raw ICE workbook dict to the generic RTD shape
+was only forwarding `bid`, `ask`, `last` — not settle prices. Deferred contracts with no live
+bid/offer were getting `mid=None` with no settle fallback.
+**Fix:** Added `sk` (settle key) to the inner loop: `('Call','call_bid','call_offer','call_last','call_settle')`.
+Settle is now forwarded to each strike entry and available for the fallback logic downstream.
+
+### [✅] Generic Straddle Loop — Settle Fallback for Deferred Contracts (KC/SB/CC)
+**File:** `app.py` — generic straddle loop (~line 2440)
+**Change:**
+1. `today_c/today_p` mid calculation now falls back to `s.get('settle')` when bid/offer absent.
+2. `prev_c/prev_p` lookups now fall back to RTD `call_settle`/`put_settle` when the contract
+   is not yet in the local CSV history (avoids missing Settlement/Change columns for back months).
+
+### [⚠️] PNG Exports — WhatsApp Readability (All Commodities)
+**File:** `templates/index.html` — `_drawSkewPng()`, `exportSurfacePanel()`
+**Problem:** At WhatsApp display width (~400–800px), fonts below ~12px logical were unreadable
+and low-contrast colours (`MUTED='#6b7280'`, `BORDER='#d1d5db'`) were invisible on phones.
+**Fix — `_drawSkewPng` (Skew History PNG):**
+- Canvas: W 840→1100, hdrH 64→80, chartH increased to 390, stats/footer rows enlarged
+- All fonts: axis labels NF(14), legend B(15), latest values B(19), delta labels B(16)
+- Line weight: 2.5→4.0
+- MUTED: '#6b7280'→'#374151', BORDER: '#9ca3af', GRID: '#cbd5e1'
+**Fix — `exportSurfacePanel` (Vol Surface PNG):**
+- Canvas: W 840→1100, hdrH 64→80, rowH 22→30, tblHdrH 28→36, skewH 130→180, footH 30→44
+- All fonts: headers B(22), section titles B(13), table data B(12-13), HV cells N(12)
+- IV column width: 57px→82px (no more clipping)
+- MUTED: '#6b7280'→'#374151', BORDER: '#9ca3af'
+- Footer shaded background '#e8ecf0'
+Both exports are commodity-agnostic — improvements apply to CT/KC/SB/CC automatically.
+**Awaiting user verification.**
+
+### [✅] `_drawStradStrip` — Label Fonts Increased
+**File:** `templates/index.html` — `_drawStradStrip()`
+**Change:** N(9)→N(11) for `ATM IMPLIED VOL` / `LIVE` / `SETTLE` / `ATM STRADDLE` labels;
+B(13)→B(14) for the contract ticker. Improves strip readability on WhatsApp exports.
+
+### [✅] generatePng / exportTradePanel — Hardcoded 'CT' Label Fixed
+**File:** `templates/index.html` — `generatePng()` line ~2683, `exportTradePanel()` line ~2245
+**Fix:** Replaced hardcoded `'CT Options Analytics'` with `(D.commodity_name||'CT Options Analytics')`
+so the header reflects the active commodity (KC/SB/CC) instead of always showing CT.
+
+---
+
 ## PHASE 1: ICE RTD AS PRIMARY LIVE SOURCE + DAILY SETTLE PERSISTENCE (2026-05-21)
 
 ### [✅] ICE RTD wired as primary; Bloomberg RTD inactive fallback
@@ -453,6 +886,116 @@ which fails on OneDrive network paths on Windows.
 
 - **Never claim a fix is done without verifying the exact code change was applied.** Read the relevant lines after every edit. "I've made the change" is only valid after the tool confirms the edit and the code is correct.
 - Before any edit: read the target lines. After any edit: verify the new code is correct. Do not rely on memory of what was written.
+
+---
+
+## SETTLEMENT PIPELINE HARDENING + EOD EMAIL DATA INTEGRITY (2026-05-31)
+
+### [fix] Multiple settle_watcher instances corrupting settle_status.json
+**Files:** `Options_flow_analyzer/settle_watcher.py`
+
+**Root cause:** Task Scheduler launched 3 separate instances on 2026-05-29 (13:00, 14:45, 14:59 ET).
+The 3rd instance hit the `else` branch of the idempotent-restart check before the 2nd instance had
+finished, calling `_write_status(today, False, None, False, None)` — resetting both flags to False.
+Result: `settle_status.json` ended the day as `options_settled: false` despite two successful writes.
+
+**Fix:** Added PID lock file (`settle_watcher.lock`) at startup. If another instance is alive, logs
+error and exits immediately. Lock removed via `atexit` on clean exit; stale locks auto-overwritten.
+See ERRORS.md Rule 10.
+
+---
+
+### [fix] `_persist_ct_options_ice` and `_persist_futures_ice` overwriting settled CSV data
+**File:** `ct-options-dashboard/app.py`
+
+**Root cause:** When dashboard was loaded on Sunday evening (2026-05-31), app.py's auto-persist
+detected RTD tickers and called `_persist_ct_options_ice`, which deleted then rewrote Friday's
+1036 correctly-settled option rows with 483 Sunday-night live prices. Similarly `_persist_futures_ice`
+had no protection against overwriting settled futures data.
+
+**Fix:** Both functions now read `settle_status.json` at entry. If `futures_settled` / `options_settled`
+is `true` for `today_str`, they return immediately without touching the CSV.
+`settle_watcher.py` is now the **sole writer** to both CSVs. See ERRORS.md Rule 11.
+
+---
+
+### [fix] Friday 2026-05-29 option settle data recovered
+**File:** `ct-options-dashboard/local_options_history.csv`
+
+The 1036 correct ICE-settled option rows written by settle_watcher at 14:45 ET were overwritten
+by app.py's auto-persist with 483 Sunday-night live prices. Recovered by running a one-shot script
+(`patch_options_may29.py`, since deleted) that re-read Friday's settled prices directly from the
+ICE RTD Settle column (static until Monday settlement) and wrote 1036 correct rows.
+`settle_status.json` manually corrected to `options_settled: true`.
+
+---
+
+### [fix] Nov 26 (CTX6) straddle showing — for Settlement, Change, % CHG Vol
+**File:** `ct-options-dashboard/app.py` — CT straddle loop, serial month fallback
+
+**Root cause:** ATM strike for CTX6 was 81 (derived from CTZ6 forward ~81.14), but
+`local_options_history.csv` had no strike-81 rows for CTX6 (jumps 80→82 for puts, 80→83 for calls).
+CSV fallback at `abs(r['strike'] - atm) >= 0.01` found no match → `prev_val = None` → all three
+fields showed `—`.
+
+**Fix:** After the CSV fallback, if `prev_c`/`prev_p` still None for a serial month, compute
+settlement straddle via B76 using the standard month's prior settlement IV
+(`atm_iv_for_date(std_tkr, settle_ref)`). Same method used for the live value — always available.
+See ERRORS.md Rule 12.
+
+---
+
+### [feat] Watcher-down alert banner on dashboard
+**Files:** `ct-options-dashboard/app.py`, `ct-options-dashboard/templates/index.html`
+
+Added `/api/watcher-status` endpoint that checks the lock file PID. Frontend polls every 90s and
+shows a red banner "settle_watcher.py is NOT running" during the settlement window (14:25–16:00 ET
+on trading days). Banner disappears automatically when watcher comes back up.
+
+---
+
+### [feat] Silent 3-minute cache warmer
+**File:** `ct-options-dashboard/templates/index.html`
+
+Added `setInterval` that silently fetches `/api/data` every 3 minutes without re-rendering.
+Ensures the server-side `_ld_cache` always has values from within the last 3 minutes when RTD
+goes offline at market close (~14:20 ET). Dashboard continues to display correct straddle values
+through the post-close window and until the next session opens (9pm ET next trading day).
+Manual refresh button unaffected.
+
+---
+
+### [fix] EOD email missing futures high/low/volume/OI when RTD workbook closed
+**File:** `ct-options-dashboard/app.py` — CSV fallback block after RTD section
+
+**Root cause:** `live_futures` was built exclusively from the RTD. If the workbook was closed,
+`live_futures = {}` — all futures fields (high, low, volume, efp, efs, block, OI, OI_chg) would
+be blank in the EOD email. `settle_watcher` already writes all these fields to the CSV at ~14:45.
+
+**Fix:** Added CSV fallback block after the RTD section. When `post_settle = True` (futures CSV
+has today's date), any missing `live_futures` fields are filled from the CSV row written by
+settle_watcher. RTD values take priority; CSV fills gaps. EOD email now has complete data
+regardless of workbook state.
+
+---
+
+### [confirmed] EOD email data pipeline — all fields verified post-settlement
+
+| Field | Source | Status |
+|---|---|---|
+| Futures settle, yest_settle, change | settle_watcher CSV | ✓ Always |
+| Futures high, low, volume, efp, efs, block | RTD → CSV fallback | ✓ Always |
+| Futures OI, OI_chg | RTD → CSV fallback | ✓ Always |
+| Straddle value (pre-settle) | Stale cache guard + cache warmer | ✓ Always |
+| Straddle value (post-settle) | local_options_history.csv | ✓ Always |
+| Straddle Settlement (prev) | flow_rtd.json → CSV prev_date | ✓ Always |
+| Straddle change, % CHG Vol | Computed from above | ✓ Always |
+| HV10/30/60/90 | local_futures_history.csv (_compute_hv) | ✓ Always |
+
+Post-close behaviour confirmed: last live bid/ask straddle values preserved via cache warmer +
+stale straddle guard from market close (~14:20 ET) through to next session open (9pm ET next
+trading day). After settlement (~14:45 ET), values automatically update to ICE official settled
+prices. No manual action required.
 
 ---
 
