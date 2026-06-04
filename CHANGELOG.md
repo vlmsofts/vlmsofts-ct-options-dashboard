@@ -2,6 +2,158 @@
 
 ---
 
+## Spreads H/L/V showing dashes — CSV fallback for rtd_spreads (2026-06-04)
+
+### [fix] H/L/V columns always blank in spreads table
+
+**Root cause:** The frontend builds spread rows from `D.rtd_spreads` (`spr = D.rtd_spreads`). When `read_spreads` in `ice_rtd_reader.py` returns empty (product name check or strip format mismatch on the ICE workbook), `rtd_spreads = {}` and the frontend's `addSpread` function always falls to the computed fallback (`_computed_spread`) which hardcodes `high:null, low:null, volume:null`. The settle_watcher writes H/L/V to `local_futures_spreads_history.csv` at ~14:31 but `load_data` never read that file.
+
+**Fix:** Added CSV fallback block in `load_data` (`app.py` lines 1345–1385), mirroring the existing futures CSV fallback at lines 1303–1343. When `fut_last == today`, loads the most-recent row per contract from `LOCAL_SPR_HISTORY`. For keys absent from `rtd_spreads`, inserts a full record (display name, settle, yest_settle, change, pct_chg, H/L/V). For keys already present, fills null H/L/V from CSV. Frontend `spr[key]` now finds the record and renders H/L/V. October (CTV*) contracts are excluded by `_has_excluded_leg` in the frontend loop.
+
+---
+
+## Straddle strikes locked to yesterday's ATM — price tape fallback (2026-06-04)
+
+### [fix] ATM strike used yesterday's futures settle when ICE workbook COM read failed
+
+**Root cause:** The ICE workbook COM interface is shared with the price tape recorder (20s poll).
+When the dashboard's `read_ice_workbook` call lands during a price tape poll cycle, COM returns
+"Call was rejected by callee" and `_ice_raw` is set to `None`. With `_ice_raw = None`,
+`ice_fut_row = {}` → futures bid/offer/last all `None` → `fwd` fell to `futures.get(ticker)`
+(yesterday's CSV settle). Strike was then `atm_strike.get(ticker)` (computed from yesterday's
+options CSV). On a day with a ~2-point move, CTH7 showed Strike=82 (yesterday settle=81.72)
+instead of Strike=80 (live mid=79.80). Settlement column was correct (always from CSV), but
+Value and % CHG Vol used the wrong ATM.
+
+**Fix — four changes to app.py:**
+
+1. **Price tape loaded before straddle loop:** Reads `ct_price_tape.csv` (updated every 20s by the
+   price tape recorder) once and builds `_tape_live = {ticker: mid}` with the most recent row per
+   contract.
+
+2. **`fwd` fallback chain extended:** `bid/offer → last → price tape mid → settle(yesterday)`.
+   The tape is used when ICE workbook COM misses, ensuring `fwd` reflects live market prices.
+
+3. **`atm` from live `fwd` when `ice_chain` empty:** Replaced `atm_strike.get(ticker)` (yesterday's
+   CSV ATM) with `ceil/floor(fwd)` using the standard rounding rule — same logic as serial months.
+
+4. **`prev_atm = atm` — Settlement uses today's ATM strike:** Settlement column now looks up
+   yesterday's straddle price AT TODAY's ATM strike (not yesterday's ATM). Change and % CHG Vol
+   are same-strike comparisons. `fwd_settle` is retained only for `settle_iv_pct` back-solve
+   (derives yesterday's implied vol at today's ATM strike using yesterday's forward).
+
+5. **Serial-month `std_fwd` also gets tape fallback:** Same bid/offer → last → tape → settle chain
+   applied to the standard-month forward used for serial ATM computation.
+
+---
+
+## Straddle snapshot moved to 14:16 + retry + dashboard backup (2026-06-03)
+
+### [fix] rtd_snap.json was never written — COM race condition between price tape and settle_watcher
+
+**Root cause:** settle_watcher's 14:18 snapshot read competed with the price tape recorder (running
+every 20s on the same Excel COM object). At 14:16:26 and 14:22:53 the price tape logged
+`RTD_READ_ERR: Call was rejected by callee`. settle_watcher's single read at 14:18:00 was silently
+rejected. `rtd_snap.json` was never created, so the straddle freeze never activated. The dashboard
+continued using live RTD in `prior_settle` mode — all mode-transition bugs (Bugs 4–6) remained.
+
+**Fix — three layers:**
+
+1. **settle_watcher.py — snapshot moved to 14:16 and retried 3×:** Target changed from 14:18 to
+   14:16 (earlier than the typical COM error window). Added retry loop: up to 3 attempts, 20 seconds
+   apart. On success writes `rtd_snap.json` and breaks. File renamed from `rtd_1418.json` to
+   `rtd_snap.json` (time-agnostic).
+
+2. **app.py — dashboard backup save:** If the dashboard reads live RTD successfully AND the current
+   ET time is ≥ 14:16 AND `rtd_snap.json` doesn't exist yet → dashboard writes the file immediately.
+   This guarantees the freeze activates even if settle_watcher misses the window entirely.
+
+3. **Freeze load updated:** `_1418_path` renamed `_snap_path` pointing to `rtd_snap.json`.
+
+**Files:**
+- `Options_flow_analyzer/settle_watcher.py` lines 466–527: 14:16 target, 3× retry loop
+- `ct-options-dashboard/app.py` lines 1490–1522: `rtd_snap.json` path, backup save block, freeze load
+
+---
+
+## Straddle 14:18 snapshot freeze (2026-06-03)
+
+### [arch] Straddles freeze at 14:18 RTD snapshot until options settle
+
+**Problem:** Repeated mode-transition bugs (Bugs 4–6 above) caused Value, Settlement, Change, and
+% CHG VOL to be wrong after futures settled at ~14:31. Root cause: the RTD workbook transitions
+from 'live' to 'prior_settle' mode at futures settlement, breaking all IV, prev_atm, and
+fwd_settle calculations in the straddle loop.
+
+**Solution:** settle_watcher already reads the RTD workbook at 14:18 in clean 'live' mode. Now
+saves the full raw RTD snapshot to `data/YYYY-MM-DD/rtd_1418.json`. The CT dashboard loads this
+file as `_ice_raw` for the straddle computation from 14:18 onward (regardless of live RTD state).
+The freeze lifts when `settle_status.json → options_settled: true`.
+
+**Scope:** Straddle tab and EOD email only. Live futures header prices, vol smile, skew history,
+and all other dashboard sections use separate data paths — completely unaffected.
+
+**The ~2-minute window (14:18–14:20 market close):** acceptable; market barely moves then.
+
+**Files:**
+- `Options_flow_analyzer/settle_watcher.py` lines 507–517: write `rtd_1418.json` at 14:18
+- `ct-options-dashboard/app.py` lines 1486–1508: load snapshot, override `_ice_raw` if not settled
+
+---
+
+## Straddle Value: use live bid/ask in prior_settle mode, not call_settle (2026-06-03)
+
+### [fix] Value column showed B76/call_settle after futures settled — options still trading
+
+**Bug:** In `prior_settle` RTD mode (after 14:31 ET futures settlement), `today_c/today_p` were
+read from `atm_row.get('call_settle')` = yesterday's option settle prices. The B76 override then
+used yesterday's IV, giving a theoretical value (e.g. 9.88) that didn't match the live market
+(Bloomberg showed 9.54 bid/ask mid). Root cause: the code assumed `prior_settle` = "market closed"
+but options trade independently until ~14:50 ET and have live bid/ask throughout.
+
+**Fix:** Always read `call_bid`/`call_offer`/`put_bid`/`put_offer` first, regardless of RTD mode.
+Set `_val_from_live_bid_ask = True` when both sides available. Fall back to `call_last`, then
+`call_settle` (only in `prior_settle` mode) if bid/ask absent. B76 override at lines 1638–1649
+now guarded by `not _val_from_live_bid_ask` — skipped entirely when live prices were used.
+
+**Files:** `app.py` lines 1546–1564 (today_c/today_p read), line 1638 (B76 override guard).
+
+---
+
+## Straddle Settlement column: use prev_atm (yesterday's strike) not live ATM (2026-06-03)
+
+### [fix] Settlement column now stable when intraday move shifts ATM strike
+
+**Bug (3rd occurrence):** Settlement column and % CHG Vol changed during the session when futures
+moved enough to push the ATM strike to the next whole number (e.g. Sep 26: 80→81 intraday).
+Root cause: `prev_c`/`prev_p` were read from `atm_row` — selected using the live forward `fwd`.
+When ATM shifted, the settlement lookup row changed, producing a different Settlement value and
+a wrong Change/% CHG Vol.
+
+**Fix:** Compute `prev_atm` and `prev_atm_row` from `fwd_settle` (ICE RTD Settle column =
+yesterday's published futures settle, static all day). All settlement straddle lookups now use
+`prev_atm` throughout: RTD call_settle/put_settle read, flow_rtd.json key, CSV fallback strike
+match, serial-month B76 fallback (new `_prev_atm_s2`), and settle_iv_pct implied_vol call.
+Live ATM (`atm`) unchanged — still drives Value, Strike display, breakeven, and live IV.
+
+**Files:** `app.py` lines 1674–1748 (straddle loop settlement section).
+
+### [fix] fwd_settle post-settlement: use csv_prev_settle not RTD settle (2026-06-03)
+
+**Bug:** Post-futures-settlement, `fwd_settle` was computed from `ice_fut_row.get('settle')` or
+`futures.get(ticker)`. Both flip to today's settled price once the ICE RTD updates (~14:31 ET).
+`prev_atm` was then derived from today's price, not yesterday's — same ATM-shift bug as above
+but in the post-settlement phase. Result: Settlement column and DOD change wrong after 14:31.
+
+**Fix:** When `post_settle=True`, use `csv_prev_settle.get((month_num, yr))` (prev_date CSV rows,
+already loaded) as the primary source for `fwd_settle`. Serial months use standard-month key
+`(std_m, std_y)`. Serial B76 fallback `_fwd_s2` also updated to `csv_prev_settle` first.
+Pre-settlement path unchanged — RTD settle is still static/correct before 14:31.
+
+**Files:** `app.py` lines 1683–1690 (`fwd_settle` derivation), line 1737 (`_fwd_s2` fallback).
+
+---
+
 ## SINGLE-PROTOCOL SETTLEMENT — full cross-system implementation complete (2026-06-01)
 
 ### [arch] settle_watcher.py is sole authority on all settlements — both systems confirmed

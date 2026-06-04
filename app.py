@@ -1342,6 +1342,48 @@ def load_data(commodity='CT'):
                 _lf['change']  = round(_s - _y, 4)
                 _lf['pct_chg'] = round((_s - _y) / _y * 100, 4)
 
+    # ── CSV fallback for spreads H/L/V when RTD is offline or read_spreads misses rows ──
+    # settle_watcher writes spreads to local_futures_spreads_history.csv at ~14:31 ET.
+    # RTD spreads are empty whenever the workbook is unavailable or product-name check
+    # fails. Load CSV and fill rtd_spreads so the frontend has H/L/V regardless.
+    if fut_last == datetime.now().strftime('%Y-%m-%d'):
+        _spr_by_key_fb = {}
+        try:
+            with open(LOCAL_SPR_HISTORY, encoding='utf-8') as _ssf:
+                for _ssr in csv.DictReader(_ssf):
+                    _sk = (_ssr.get('contract') or '').strip()
+                    _sd = (_ssr.get('date') or '').strip()
+                    if _sk and _sd and (_sk not in _spr_by_key_fb or _sd > _spr_by_key_fb[_sk]['date']):
+                        _spr_by_key_fb[_sk] = _ssr
+        except Exception:
+            pass
+        def _sfv(v):
+            try: return float(v) if v not in (None, '') else None
+            except (ValueError, TypeError): return None
+        for _sk, _scr in _spr_by_key_fb.items():
+            _sh = _sfv(_scr.get('high')); _sl = _sfv(_scr.get('low')); _svol = _sfv(_scr.get('volume'))
+            if _sk not in rtd_spreads:
+                _sparts = _sk.split('/')
+                if len(_sparts) == 2:
+                    _spn = parse_ct_ticker(_sparts[0]); _spf = parse_ct_ticker(_sparts[1])
+                    _sdisp = (f"{MONTH_NAME[_spn[2]]}{str(_spn[1])[-2:]}/{MONTH_NAME[_spf[2]]}{str(_spf[1])[-2:]}"
+                              if _spn and _spf else _sk)
+                    _ss_stt = _sfv(_scr.get('settle')); _ss_ys = _sfv(_scr.get('yest_settle'))
+                    _ss_chg = _sfv(_scr.get('change'))
+                    _ss_pct = round(_ss_chg / _ss_ys * 100, 2) if (_ss_chg is not None and _ss_ys and _ss_ys != 0) else None
+                    rtd_spreads[_sk] = {
+                        'display': _sdisp, 'settle': _ss_stt, 'yest_settle': _ss_ys,
+                        'change': _ss_chg, 'pct_chg': _ss_pct,
+                        'high': _sh, 'low': _sl, 'volume': _svol,
+                        'block_vol': _sfv(_scr.get('block_vol')),
+                        'efs_vol': _sfv(_scr.get('efs_vol')),
+                        'efp_vol': _sfv(_scr.get('efp_vol')),
+                    }
+            else:
+                for _sfk, _scv in [('high', _sh), ('low', _sl), ('volume', _svol)]:
+                    if rtd_spreads[_sk].get(_sfk) is None:
+                        rtd_spreads[_sk][_sfk] = _scv
+
     # ── Live smile from Bloomberg 'all options' sheet ─────────────────────────
     # Parity forward derived from live mid prices — consistent with every strike.
     # OTM convention: puts for K < ATM, calls for K > ATM, average at ATM.
@@ -1483,6 +1525,44 @@ def load_data(commodity='CT'):
         except Exception:
             _ice_raw = None
 
+    # Snapshot freeze — use the 14:16 RTD capture for straddle/EOD computations.
+    # Avoids all mode-transition issues between futures and options settlement.
+    # Freeze lifts once options_settled=true in settle_status.json.
+    # Does not affect any other dashboard function (live futures, vol smile, skew, etc.).
+    _snap_path = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), '..', 'Options_flow_analyzer',
+        'data', today_str, 'rtd_snap.json'
+    ))
+    _opts_settled_now = False
+    try:
+        _ss_path = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+        with open(_ss_path, encoding='utf-8') as _ssf:
+            _ss_data = _json.load(_ssf)
+        _opts_settled_now = bool(_ss_data.get('date') == today_str and _ss_data.get('options_settled'))
+    except Exception:
+        pass
+    # Dashboard-side backup: if live RTD read succeeded and it's >= 14:16, save snapshot
+    # so the freeze works even if settle_watcher missed the 14:16 window.
+    if _ice_raw and not _opts_settled_now and not os.path.exists(_snap_path):
+        try:
+            try:
+                from zoneinfo import ZoneInfo as _ZI_snap
+            except ImportError:
+                from backports.zoneinfo import ZoneInfo as _ZI_snap
+            _snap_now = datetime.now(_ZI_snap('America/New_York'))
+            if (_snap_now.hour, _snap_now.minute) >= (14, 16):
+                os.makedirs(os.path.dirname(_snap_path), exist_ok=True)
+                with open(_snap_path, 'w', encoding='utf-8') as _sf:
+                    _json.dump(_ice_raw, _sf)
+        except Exception:
+            pass
+    if not _opts_settled_now and os.path.exists(_snap_path):
+        try:
+            with open(_snap_path, encoding='utf-8') as _f14:
+                _ice_raw = _json.load(_f14)
+        except Exception:
+            pass  # fall through to live RTD result or None
+
     # Supplement straddle list with any contracts in the live workbook not yet in the CSV
     straddle_tickers = list(expiry_list)
     if _ice_raw:
@@ -1507,6 +1587,27 @@ def load_data(commodity='CT'):
     # Sep27 and Nov27 excluded until liquidity warrants inclusion
     straddle_tickers = [t for t in straddle_tickers if t not in {'CTU7', 'CTX7'}]
 
+    # Price tape fallback: most-recent live mid per contract from ct_price_tape.csv.
+    # Used when _ice_raw is None (COM contention) so straddle ATM reflects live prices.
+    _tape_live = {}
+    try:
+        _tape_path = os.path.normpath(os.path.join(
+            os.path.dirname(__file__), '..', 'Options_flow_analyzer',
+            'data', today_str, 'ct_price_tape.csv'
+        ))
+        if os.path.exists(_tape_path):
+            import csv as _csv_tape
+            with open(_tape_path, newline='', encoding='utf-8') as _tf:
+                for _tr in reversed(list(_csv_tape.DictReader(_tf))):
+                    _tc = _tr.get('contract', '')
+                    if _tc and _tc not in _tape_live:
+                        _tmid = _tr.get('mid') or _tr.get('last')
+                        if _tmid:
+                            try: _tape_live[_tc] = float(_tmid)
+                            except ValueError: pass
+    except Exception:
+        pass
+
     # The GitHub options CSV is published one business day late — last_date is the
     # publication date, not the trading date.  Settlement was actually priced on the
     # last CT trading session before today.  Use that date for T_settle so the
@@ -1530,12 +1631,14 @@ def load_data(commodity='CT'):
         ice_chain   = (_ice_raw or {}).get('options', {}).get(ticker, [])
         ice_fut_row = (_ice_raw or {}).get('futures', {}).get(ticker, {})
 
-        # Live forward: bid/offer mid → last → settle
+        # Live forward: bid/offer mid → last → price tape → settle
         _fb, _fo = ice_fut_row.get('bid'), ice_fut_row.get('offer')
         if _fb and _fo and _fb > 0 and _fo > 0:
             fwd = (_fb + _fo) / 2.0
         elif ice_fut_row.get('last') and ice_fut_row['last'] > 0:
             fwd = ice_fut_row['last']
+        elif _tape_live.get(ticker):
+            fwd = _tape_live[ticker]
         else:
             fwd = ice_fut_row.get('settle') or futures.get(ticker)
 
@@ -1545,20 +1648,29 @@ def load_data(commodity='CT'):
             atm_row = next((r for r in ice_chain if r['strike'] == atm), None)
             if atm_row:
                 _rtd_mode = (_ice_raw or {}).get('mode', 'live')
-                if _rtd_mode != 'live':
-                    # Market closed (prior_settle mode) — call_last is stale,
-                    # call_settle is the authoritative settlement price.
-                    today_c = atm_row.get('call_settle')
-                    today_p = atm_row.get('put_settle')
+                # Always try live bid/ask first — options trade until ~14:50 ET regardless
+                # of futures settlement. prior_settle mode only means futures settled, not
+                # that options bid/ask is stale. Only fall back to call_settle when absent.
+                _val_from_live_bid_ask = False
+                cb, co = atm_row.get('call_bid'), atm_row.get('call_offer')
+                pb, po = atm_row.get('put_bid'),  atm_row.get('put_offer')
+                if cb and co and cb > 0 and co > 0 and pb and po and pb > 0 and po > 0:
+                    today_c = (cb + co) / 2.0
+                    today_p = (pb + po) / 2.0
+                    _val_from_live_bid_ask = True
                 else:
-                    cb, co = atm_row.get('call_bid'), atm_row.get('call_offer')
-                    pb, po = atm_row.get('put_bid'),  atm_row.get('put_offer')
-                    today_c = ((cb + co) / 2.0) if (cb and co and cb > 0 and co > 0) else atm_row.get('call_last')
-                    today_p = ((pb + po) / 2.0) if (pb and po and pb > 0 and po > 0) else atm_row.get('put_last')
+                    today_c = atm_row.get('call_last')
+                    today_p = atm_row.get('put_last')
+                    if _rtd_mode != 'live':
+                        # call_last is stale in prior_settle mode — fall back to call_settle
+                        if today_c is None: today_c = atm_row.get('call_settle')
+                        if today_p is None: today_p = atm_row.get('put_settle')
             else:
                 today_c = today_p = None
         elif fwd:
-            atm = atm_strike.get(ticker)
+            # ice_chain empty (COM miss) — compute ATM from live fwd directly
+            _atm_frac = fwd % 1.0
+            atm = float(math.ceil(fwd) if _atm_frac >= 0.50 else math.floor(fwd))
             today_c = today_p = None
         else:
             fwd = atm = today_c = today_p = None
@@ -1593,6 +1705,8 @@ def load_data(commodity='CT'):
                 std_fwd = (_sfb + _sfo) / 2.0
             elif std_row.get('last') and std_row['last'] > 0:
                 std_fwd = std_row['last']
+            elif _tape_live.get(std_tkr):
+                std_fwd = _tape_live[std_tkr]
             else:
                 std_fwd = std_row.get('settle') or futures.get(std_tkr)
             if std_fwd:
@@ -1625,10 +1739,10 @@ def load_data(commodity='CT'):
                 continue
         elif today_c is not None and today_p is not None:
             val = round(today_c + today_p, 2)
-            # prior_settle mode: call_settle still = yesterday's values until ICE publishes today's.
-            # Between futures and options settlement: override with B76 at today's settled futures.
-            # Once settle_watcher writes options CSV (_csv_opt_settle populated), use CSV prices instead.
-            if _rtd_mode != 'live' and post_settle:
+            # prior_settle mode + no live bid/ask: val came from call_settle (yesterday's).
+            # Override with CSV settled prices if available, else B76 at today's settled futures.
+            # Skip when live bid/ask was used — val already reflects today's market.
+            if _rtd_mode != 'live' and post_settle and not _val_from_live_bid_ask:
                 if _csv_opt_settle:
                     _opt_csv = _csv_opt_settle.get((ticker, int(atm)), {})
                     _tc_csv, _tp_csv = _opt_csv.get('C'), _opt_csv.get('P')
@@ -1672,22 +1786,40 @@ def load_data(commodity='CT'):
             iv_pct = atm_iv.get(ticker)
 
         # Settlement straddle = yesterday's published settlement straddle.
-        #
+        # fwd_settle = yesterday's futures settle — used only for settle_iv_pct back-solve.
+        # Pre-settlement: RTD 'settle' is static (yesterday's); post-settlement it flips
+        # to today's so use csv_prev_settle to stay anchored to yesterday.
+        if post_settle:
+            if month_num not in CT_STANDARD_MONTHS:
+                _sm_fs, _sy_fs = next_standard_month(month_num, yr)
+                fwd_settle = csv_prev_settle.get((_sm_fs, _sy_fs)) or (ice_fut_row.get('settle') if ice_fut_row else None) or futures.get(ticker)
+            else:
+                fwd_settle = csv_prev_settle.get((month_num, yr)) or (ice_fut_row.get('settle') if ice_fut_row else None) or futures.get(ticker)
+        else:
+            fwd_settle = (ice_fut_row.get('settle') if ice_fut_row else None) or futures.get(ticker)
+
+        # Settlement lookup uses TODAY's ATM strike (prev_atm = atm).
+        # Settlement = yesterday's straddle price at today's ATM → Change and % CHG Vol
+        # are same-strike comparisons. fwd_settle is only used in the settle_iv_pct
+        # back-solve to derive yesterday's implied vol at today's ATM strike.
+        prev_atm = atm
+        prev_atm_row = atm_row
+
         # Pre-settlement: RTD call_settle/put_settle = yesterday's values → use directly.
         # Post-settlement: RTD has flipped to today's values.
         #   Priority 1: flow_rtd.json (written at futures settlement, before options
         #               settled) — holds yesterday's ICE call_settle/put_settle exactly.
         #   Priority 2: CSV prev_date px_settle (Bloomberg approx, fallback only).
         prev_c = prev_p = None
-        if not post_settle and atm_row:
-            cs = atm_row.get('call_settle')
-            ps = atm_row.get('put_settle')
+        if not post_settle and prev_atm_row:
+            cs = prev_atm_row.get('call_settle')
+            ps = prev_atm_row.get('put_settle')
             if cs and cs > 0: prev_c = cs
             if ps and ps > 0: prev_p = ps
 
         if (prev_c is None or prev_p is None) and post_settle:
             # flow_rtd.json — correct ICE yesterday settle
-            _fk = (ticker, int(atm))
+            _fk = (ticker, int(prev_atm))
             if _fk in _flow_rtd_opts:
                 prev_c, prev_p = _flow_rtd_opts[_fk]
 
@@ -1695,7 +1827,7 @@ def load_data(commodity='CT'):
         if prev_c is None or prev_p is None:
             settle_ref = prev_date if (post_settle and last_date == today_str) else last_date
             for r in ct_opts:
-                if r['ticker'] != ticker or abs(r['strike'] - atm) >= 0.01:
+                if r['ticker'] != ticker or abs(r['strike'] - prev_atm) >= 0.01:
                     continue
                 if r['date'] == settle_ref:
                     if r['pc'] == 'Call' and r['px'] > 0 and prev_c is None:
@@ -1705,16 +1837,20 @@ def load_data(commodity='CT'):
 
         # Serial-month B76 fallback: if CSV has no ATM strike for this serial,
         # derive settlement straddle from the standard month's prior settlement IV.
-        # Same method used for the live value — always consistent and available.
+        # Use _prev_atm_s2 (from yesterday's standard month settle) not live atm.
         if (prev_c is None or prev_p is None) and month_num not in CT_STANDARD_MONTHS:
             _settle_ref2 = prev_date if (post_settle and last_date == today_str) else last_date
             std_m2, std_y2 = next_standard_month(month_num, yr)
             _inv_mc2 = {v: k for k, v in MONTH_CODE.items()}
             std_tkr2 = f"CT{_inv_mc2.get(std_m2, '')}{str(std_y2)[-1:]}"
             _std_settle_iv = atm_iv_for_date(std_tkr2, _settle_ref2)
-            _fwd_s2 = futures.get(std_tkr2) or futures.get(ticker)
+            _fwd_s2 = csv_prev_settle.get((std_m2, std_y2)) or futures.get(std_tkr2) or futures.get(ticker)
+            if _fwd_s2 and _fwd_s2 > 0:
+                _prev_atm_s2 = float(math.ceil(_fwd_s2) if (_fwd_s2 % 1.0) >= 0.50 else math.floor(_fwd_s2))
+            else:
+                _prev_atm_s2 = prev_atm
             if _std_settle_iv and _fwd_s2 and _fwd_s2 > 0 and T_settle > 0:
-                _half = b76_price(_fwd_s2, atm, T_settle, RISK_FREE, _std_settle_iv / 100.0, True)
+                _half = b76_price(_fwd_s2, _prev_atm_s2, T_settle, RISK_FREE, _std_settle_iv / 100.0, True)
                 if _half and _half > 0:
                     prev_c = _half
                     prev_p = _half
@@ -1725,13 +1861,13 @@ def load_data(commodity='CT'):
         # % CHG on day = live IV − settlement IV
         # Settlement IV uses T_settle (DTE as of last_date) not today's T — the settlement
         # straddle price was set when the option had T_settle days left, not T days.
-        fwd_settle = (ice_fut_row.get('settle') if ice_fut_row else None) or futures.get(ticker)
+        # prev_atm used throughout so settlement IV is computed at yesterday's strike.
         settle_iv_pct = None
         if prev_val and fwd_settle and fwd_settle > 0 and T_settle > 0:
             df_s = math.exp(-RISK_FREE * T_settle)
-            call_eq_s = (prev_val + (fwd_settle - atm) * df_s) / 2.0
+            call_eq_s = (prev_val + (fwd_settle - prev_atm) * df_s) / 2.0
             if call_eq_s > 0:
-                iv_s = implied_vol(call_eq_s, fwd_settle, atm, T_settle, RISK_FREE, True)
+                iv_s = implied_vol(call_eq_s, fwd_settle, prev_atm, T_settle, RISK_FREE, True)
                 if iv_s:
                     settle_iv_pct = round(iv_s * 100, 2)
         chg_vol = round(iv_pct - settle_iv_pct, 2) if (iv_pct is not None and settle_iv_pct is not None) else None
@@ -4090,6 +4226,85 @@ def api_flow_weekly():
         'strike_rows': strike_rows,
         'flags':       flags,
     }))
+
+
+@server.route('/api/draft-eod-email', methods=['POST'])
+def api_draft_eod_email():
+    """Open an Outlook desktop draft with the EOD PNG embedded inline (Windows only)."""
+    try:
+        import win32com.client
+        import pythoncom
+        import base64
+        import tempfile
+        import threading
+        import time
+    except ImportError:
+        return jsonify({'error': 'win32com not available'}), 500
+
+    body = request.get_json(silent=True) or {}
+    subject  = body.get('subject', 'VLM Cotton EOD Summary')
+    date_str = body.get('date_str', '')
+    png_b64  = body.get('png_b64', '')
+    if not png_b64:
+        return jsonify({'error': 'No PNG data'}), 400
+
+    if ',' in png_b64:
+        png_b64 = png_b64.split(',', 1)[1]
+    try:
+        png_bytes = base64.b64decode(png_b64)
+    except Exception as e:
+        return jsonify({'error': f'Bad PNG data: {e}'}), 400
+
+    tmp_path = None
+    err_box  = []
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+            tmp_path = tf.name
+            tf.write(png_bytes)
+    except Exception as e:
+        return jsonify({'error': f'Temp file: {e}'}), 500
+
+    html_body = (
+        f'<html><body style="font-family:Arial,sans-serif;margin:0;padding:12px">'
+        f'<p style="margin:0 0 10px 0">ICE Cotton No. 2 &mdash; End of Day Summary<br>'
+        f'Date: {date_str}</p>'
+        f'<img src="cid:eod_png" style="max-width:100%">'
+        f'</body></html>'
+    )
+
+    def _open_draft(subj, body_html, png_path, errors):
+        # COM must be initialised per-thread; do NOT call CoUninitialize until
+        # after Outlook has finished creating the inspector window.
+        pythoncom.CoInitialize()
+        try:
+            ol = win32com.client.Dispatch('Outlook.Application')
+            mail = ol.CreateItem(0)  # olMailItem
+            mail.Subject = subj
+            mail.HTMLBody = body_html
+            att = mail.Attachments.Add(png_path)
+            att.PropertyAccessor.SetProperty(
+                'http://schemas.microsoft.com/mapi/proptag/0x3712001F', 'eod_png')
+            mail.Display(False)
+            time.sleep(3)   # keep COM apartment alive while Outlook loads the window
+        except Exception as exc:
+            errors.append(str(exc))
+        finally:
+            pythoncom.CoUninitialize()
+            try:
+                os.unlink(png_path)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_open_draft,
+                         args=(subject, html_body, tmp_path, err_box),
+                         daemon=True)
+    t.start()
+    t.join(timeout=12)   # wait up to 12 s for the window to open
+
+    if err_box:
+        return jsonify({'error': err_box[0]}), 500
+    return jsonify({'ok': True})
 
 
 if __name__ == '__main__':
