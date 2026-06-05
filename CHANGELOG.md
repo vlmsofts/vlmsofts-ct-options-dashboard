@@ -2,6 +2,16 @@
 
 ---
 
+## Serial month straddle ATM vol identical to standard month (2026-06-05)
+
+### [fix] CTU6 showing same ATM vol as CTZ6 post-settlement
+
+**Root cause:** When no live bid/ask is present for a serial option chain post-settle, the B76 fallback in the straddle loop used `std_iv` (the standard month's ATM IV — e.g. CTZ6 = 22.01%) to price the serial's straddle. Back-solving that B76 value recovers approximately the same input vol regardless of T, so CTU6 and CTZ6 both displayed ~22.01%. The serial's own ATM IV (`atm_iv.get(ticker)`) was already computed from yesterday's settled CTU6 option prices (22.86%) but was never used in this path.
+
+**Fix:** `app.py` serial B76 fallback now uses `atm_iv.get(ticker) or std_iv` as the vol input. CTU6 uses its own CSV-derived settled IV; falls back to the standard month IV only if the serial has no CSV history. Confirmed with flow analyzer: iv_snapshot.py independently computed CTU6 ATM IV = 22.86% from CTU6's own settled prices — consistent with the fix.
+
+---
+
 ## Spreads H/L/V showing dashes — CSV fallback for rtd_spreads (2026-06-04)
 
 ### [fix] H/L/V columns always blank in spreads table

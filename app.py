@@ -1728,9 +1728,10 @@ def load_data(commodity='CT'):
                         _tp = (_pb + _po) / 2.0
                 if _tc and _tp:
                     val = round(_tc + _tp, 2)
-                elif std_iv:
-                    val = round(b76_price(std_fwd, atm, T, RISK_FREE, std_iv / 100.0, True) +
-                                b76_price(std_fwd, atm, T, RISK_FREE, std_iv / 100.0, False), 2)
+                elif atm_iv.get(ticker) or std_iv:
+                    _serial_iv = (atm_iv.get(ticker) or std_iv) / 100.0
+                    val = round(b76_price(std_fwd, atm, T, RISK_FREE, _serial_iv, True) +
+                                b76_price(std_fwd, atm, T, RISK_FREE, _serial_iv, False), 2)
                 else:
                     continue
             elif today_c is not None and today_p is not None:
