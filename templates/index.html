@@ -3761,7 +3761,7 @@ function renderStraddles(){
   const fmtSgn = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2);
   const negClr = v => v == null ? '#222' : v < 0 ? '#c00000' : v > 0 ? '#1a6e2e' : '#222';
 
-  const displayRows = rows.filter(r => r.chg_vol == null || Math.abs(r.chg_vol) <= 5);
+  const displayRows = rows.filter(r => r.chg_vol == null || Math.abs(r.chg_vol) <= 15);
   displayRows.forEach((r, i) => {
     const bg = i % 2 === 0 ? '#ffffff' : '#f0f4fb';
     tbody.innerHTML += `<tr style="background:${bg}">
@@ -4267,7 +4267,7 @@ function _buildEodCanvas(data){
   const SPR_W   = [220,140,144,138,128,112,112,206]; // 8 cols — sum=1200
   const HV_W    = [240,240,240,240,240];
 
-  const stradSrc = (data.straddles||[]).filter(r=>r.chg_vol==null||Math.abs(r.chg_vol)<=5);
+  const stradSrc = (data.straddles||[]).filter(r=>r.chg_vol==null||Math.abs(r.chg_vol)<=15);
   const futSrc   = data.futures  || [];
   const sprSrc   = data.spreads  || [];
   const hvSrc    = data.hv       || [];
