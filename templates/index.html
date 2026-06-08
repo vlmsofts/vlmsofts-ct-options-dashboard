@@ -3831,7 +3831,7 @@ function exportStraddlePanel(){
 
   const W = [170, 84, 96, 108, 116, 112, 94, 72, 134, 94]; // sum = 1080
   const totalW = W.reduce((a,b) => a+b, 0);
-  const exportRows = rows.filter(r => r.chg_vol == null || Math.abs(r.chg_vol) <= 5);
+  const exportRows = rows.filter(r => r.chg_vol == null || Math.abs(r.chg_vol) <= 15);
   const totalH = HDR_H + ACCENT + COL_H + exportRows.length * ROW_H + FOOTER_H;
 
   const cv = document.createElement('canvas');
