@@ -796,6 +796,8 @@ tr:hover td{background:var(--surf2)}
         style="background:#1a3a6e;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5">↑ Push to Site</button>
       <button id="eod-email-btn" onclick="draftEodEmail()" disabled
         style="background:#2c3e50;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5">✉ Draft Email</button>
+      <button id="eod-snapshot-btn" onclick="saveEodSnapshot()"
+        style="background:#0d7a4f;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer">💾 Save Snapshot</button>
       <button onclick="closeEodModal()"
         style="background:#555;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer">✕ Close</button>
     </div>
@@ -4139,7 +4141,7 @@ function _buildEodData(){
     .map(t=>{ const h=hvSrc[t]||{}; return {label:labels[t]||t,hv10:h.hv10,hv30:h.hv30,hv60:h.hv60,hv90:h.hv90}; });
 
   return {
-    date:      D.last_date || new Date().toISOString().slice(0,10),
+    date:      D.today_str || D.last_date || new Date().toISOString().slice(0,10),
     time_et:   timeStr,
     straddles: D.straddles || [],
     futures,
@@ -4217,6 +4219,13 @@ function draftEodEmail(){
     downloadEodPng();
     window.location.href = `mailto:?subject=${encodeURIComponent(subject)}`;
   });
+}
+
+function saveEodSnapshot(){
+  fetch('/api/save-eod-snapshot', {method: 'POST'})
+    .then(r => r.json())
+    .then(j => console.log('save-eod-snapshot:', j))
+    .catch(e => console.log('save-eod-snapshot error:', e));
 }
 
 function _buildEodCanvas(data){

@@ -3535,25 +3535,74 @@ def compute_skew_history(commodity='CT'):
     def _empty_series():
         return {k: [] for k in ['dates'] + SERIES_KEYS}
 
-    # Rolling: nearest standard month (H/K/N/Z) with DTE >= 30 per date
+    # Rolling: constant-maturity 30-day interpolation across standard months (H/K/N/Z).
+    # ATM uses variance interpolation (σ²×T); skew points use linear on vol.
+    T_TARGET = 30 / 365.0
+    SKEW_KEYS = ['call_10', 'call_25', 'call_35', 'put_10', 'put_25', 'put_35']
     rolling = _empty_series()
     for d in all_dates:
-        best = None
-        best_dte = None
+        candidates = []
         for ticker, date_map in ticker_date_ivs.items():
             if ticker_meta.get(ticker, {}).get('mo') not in std_months:
                 continue
             ivs = date_map.get(d)
-            if not ivs or ivs['_dte'] < 30:
+            if not ivs:
                 continue
-            if best is None or ivs['_dte'] < best_dte:
-                best = ivs
-                best_dte = ivs['_dte']
-        if best is None:
+            candidates.append(ivs)
+        if not candidates:
             continue
+        candidates.sort(key=lambda x: x['_dte'])
+
+        # Case 4: all expiries below 30 DTE — skip
+        if candidates[-1]['_dte'] < 30:
+            continue
+
+        # Case 3: all expiries above 30 DTE — flat extrapolation, use nearest
+        if candidates[0]['_dte'] > 30:
+            pt = candidates[0]
+            rolling['dates'].append(d)
+            rolling['atm'].append(pt['atm'])
+            for k in SKEW_KEYS:
+                rolling[k].append(pt.get(k))
+            continue
+
+        # Case 1: exact 30 DTE match
+        exact = next((c for c in candidates if c['_dte'] == 30), None)
+        if exact:
+            rolling['dates'].append(d)
+            rolling['atm'].append(exact['atm'])
+            for k in SKEW_KEYS:
+                rolling[k].append(exact.get(k))
+            continue
+
+        # Case 2: T_TARGET brackets two expiries — interpolate
+        short = next((c for c in reversed(candidates) if c['_dte'] < 30), None)
+        long_ = next((c for c in candidates if c['_dte'] > 30), None)
+        if short is None or long_ is None:
+            continue
+        T_s = short['_dte'] / 365.0
+        T_l = long_['_dte'] / 365.0
+        w = (T_TARGET - T_s) / (T_l - T_s)
+
+        # ATM: linear interpolation on variance (σ²×T)
+        atm_s = short['atm'] / 100.0
+        atm_l = long_['atm'] / 100.0
+        var_s = atm_s ** 2 * T_s
+        var_l = atm_l ** 2 * T_l
+        var_t = var_s + w * (var_l - var_s)
+        atm_30 = round(math.sqrt(var_t / T_TARGET) * 100, 2)
+
         rolling['dates'].append(d)
-        for k in SERIES_KEYS:
-            rolling[k].append(best.get(k))
+        rolling['atm'].append(atm_30)
+
+        # Skew points: linear interpolation on vol
+        for k in SKEW_KEYS:
+            v_s = short.get(k)
+            v_l = long_.get(k)
+            if v_s is not None and v_l is not None:
+                rolling[k].append(round(v_s + w * (v_l - v_s), 2))
+            else:
+                rolling[k].append(None)
 
     # Per-ticker series — only active/future contracts (expiry >= today)
     today_iso = datetime.utcnow().strftime('%Y-%m-%d')
@@ -3789,21 +3838,19 @@ def api_skew_history():
         return _no_cache(jsonify({'error': f'Unknown commodity: {commodity}'}))
     return _no_cache(jsonify(compute_skew_history(commodity)))
 
-@server.route('/api/eod-email')
-def api_eod_email():
+def _assemble_eod_data():
     """
-    Assembles the four-section EOD email data for ICE Cotton No. 2.
+    Assembles the four-section EOD data for ICE Cotton No. 2.
     Straddles  — full straddle tab output (all contracts, all columns)
     Futures    — standard delivery months with all ICE RTD columns
     Spreads    — calendar spreads direct from ICE RTD (all columns)
     HV         — 10/30/60/90-day historical volatility
+    Returns a plain dict (or {'error': ...}); shared by /api/eod-email
+    and /api/save-eod-snapshot so the logic lives in one place.
     """
-    try:
-        d = load_data('CT')
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    d = load_data('CT')
     if 'error' in d:
-        return jsonify({'error': d['error']}), 500
+        return {'error': d['error']}
 
     # Timestamp in ET
     try:
@@ -3997,14 +4044,89 @@ def api_eod_email():
                 'hv90':  h.get('hv90'),
             })
 
-    return jsonify({
+    return {
         'date':      d.get('last_date'),
         'time_et':   time_et,
         'straddles': straddles,
         'futures':   futures_rows,
         'spreads':   spread_rows,
         'hv':        hv_rows,
-    })
+    }
+
+
+@server.route('/api/eod-email')
+def api_eod_email():
+    """Returns the assembled four-section EOD data as JSON (see _assemble_eod_data)."""
+    try:
+        data = _assemble_eod_data()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    if 'error' in data:
+        return jsonify({'error': data['error']}), 500
+    return jsonify(data)
+
+
+@server.route('/api/save-eod-snapshot', methods=['POST'])
+def api_save_eod_snapshot():
+    """
+    Assemble EOD data (shared with /api/eod-email), extract a compact
+    snapshot, and write it to the market-intelligence data folder.
+    """
+    try:
+        data = _assemble_eod_data()
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    if 'error' in data:
+        return jsonify({'success': False, 'error': data['error']}), 500
+
+    # Standard CT delivery months only (Mar/May/Jul/Dec), matched on label text.
+    _STD_LABELS = ('Mar', 'May', 'Jul', 'Dec')
+    def _is_std(row):
+        lbl = (row.get('label') or '')
+        return any(m in lbl for m in _STD_LABELS)
+
+    try:
+        std_futs   = [f for f in data.get('futures', [])   if _is_std(f)]
+        std_strads = [s for s in data.get('straddles', []) if _is_std(s)]
+        hv         = data.get('hv', [])
+
+        def _settle(i):
+            return std_futs[i]['settle'] if i < len(std_futs) else None
+
+        # atm_iv_30d: first standard straddle with dte >= 30; atm_vol already in %.
+        atm_iv_30d = None
+        for s in std_strads:
+            dte = s.get('dte')
+            if dte is not None and dte >= 30:
+                av = s.get('atm_vol')
+                atm_iv_30d = round(av, 2) if av is not None else None
+                break
+
+        hv0  = hv[0] if hv else {}
+        hv30 = round(hv0['hv30'] * 100, 2) if hv0.get('hv30') is not None else None
+        hv60 = round(hv0['hv60'] * 100, 2) if hv0.get('hv60') is not None else None
+
+        extracted = {
+            'date':       data.get('date'),
+            'ct1_settle': _settle(0),
+            'ct2_settle': _settle(1),
+            'ct3_settle': _settle(2),
+            'atm_iv_30d': atm_iv_30d,
+            'hv30':       hv30,
+            'hv60':       hv60,
+        }
+
+        out_path = os.path.join(
+            r'C:\Users\Louis\OneDrive - VLM Commodities LTD\Desktop',
+            'market-intelligence', 'data', 'eod_snapshot.json'
+        )
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(extracted, f, indent=2)
+
+        return jsonify({'success': True, 'path': out_path, 'data': extracted})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @server.route('/api/watcher-status', methods=['GET'])
