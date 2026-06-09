@@ -2068,6 +2068,28 @@ def _persist_today(_unused=None):
         log.warning('fut bloomberg backup failed: %s', e)
 
 
+def _append_projected(path, new_rows):
+    """Append GitHub feed rows to a local CSV, projected onto that file's own
+    column schema. The GitHub feed carries more columns (and a different order)
+    than the compact local KC/SB/CC files; writing raw rows would misalign data
+    when the file is later read by DictReader against its short header. Read the
+    existing header and write only those fields, by name, dropping extras."""
+    if not os.path.exists(path):
+        # No local file yet — write with the feed's own columns + header.
+        with open(path, 'a', newline='', encoding='utf-8') as f:
+            w = csv.DictWriter(f, fieldnames=list(new_rows[0].keys()),
+                               extrasaction='ignore')
+            w.writeheader()
+            w.writerows(new_rows)
+        return
+    with open(path, 'r', newline='', encoding='utf-8') as f:
+        header = next(csv.reader(f))
+    with open(path, 'a', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=header, extrasaction='ignore')
+        # Project each feed row onto the local header; missing cols -> ''.
+        w.writerows({k: r.get(k, '') for k in header} for r in new_rows)
+
+
 def _persist_today_generic(commodity):
     """Append any dates from GitHub that are newer than local files for KC/SB/CC."""
     cfg = COMMODITY_CONFIG[commodity]
@@ -2106,12 +2128,7 @@ def _persist_today_generic(commodity):
                         and r.get('commodity', '').strip().upper() == commodity]
             if new_rows:
                 new_rows.sort(key=lambda r: r.get('date', ''))
-                need_header = not os.path.exists(cfg['opt_csv'])
-                with open(cfg['opt_csv'], 'a', newline='', encoding='utf-8') as f:
-                    w = csv.DictWriter(f, fieldnames=new_rows[0].keys())
-                    if need_header:
-                        w.writeheader()
-                    w.writerows(new_rows)
+                _append_projected(cfg['opt_csv'], new_rows)
                 log.info('%s: persisted %d opt rows', commodity, len(new_rows))
     except Exception as e:
         log.warning('%s opt persist failed: %s', commodity, e)
@@ -2124,12 +2141,7 @@ def _persist_today_generic(commodity):
                         and r.get('commodity', '').strip().upper() == commodity]
             if new_rows:
                 new_rows.sort(key=lambda r: r.get('date', ''))
-                need_header = not os.path.exists(cfg['fut_csv'])
-                with open(cfg['fut_csv'], 'a', newline='', encoding='utf-8') as f:
-                    w = csv.DictWriter(f, fieldnames=new_rows[0].keys())
-                    if need_header:
-                        w.writeheader()
-                    w.writerows(new_rows)
+                _append_projected(cfg['fut_csv'], new_rows)
                 log.info('%s: persisted %d fut rows', commodity, len(new_rows))
     except Exception as e:
         log.warning('%s fut persist failed: %s', commodity, e)
@@ -2590,8 +2602,11 @@ def _load_generic_data(commodity):
     serial_map = cfg['serial_map']
 
     try:
-        opt_rows = fetch_csv(OPT_CSV_URL)
-        oi_rows  = fetch_csv(OI_CSV_URL)
+        # Mirror cotton: read deep history from the local commodity files.
+        # The OI-dashboard GitHub feed is used only by _persist_today_generic
+        # to append the daily tail into these same local files.
+        opt_rows = read_local_csv(cfg['opt_csv'])
+        oi_rows  = read_local_csv(cfg['fut_csv'])
     except Exception as e:
         return {'error': str(e)}
 
@@ -3308,8 +3323,10 @@ def compute_skew_history(commodity='CT'):
         return _cache_entry['data']
 
     try:
-        opt_rows = fetch_csv(OPT_CSV_URL)
-        oi_rows  = fetch_csv(OI_CSV_URL)
+        # Mirror cotton: read deep history from the local commodity files
+        # (same files _load_generic_data uses), not the shallow GitHub feed.
+        opt_rows = read_local_csv(cfg['opt_csv'])
+        oi_rows  = read_local_csv(cfg['fut_csv'])
     except Exception as e:
         return {'error': str(e)}
 
