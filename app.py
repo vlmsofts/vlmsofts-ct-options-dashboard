@@ -391,6 +391,21 @@ def _generic_to_ice_code(contract, date_str):
     return f"{contract[:2]}{mc}{str(year)[-1]}"
 
 
+def _ordinal_to_ice_code(contract, date_str, prefix):
+    """Prefix-aware ordinal->ICE: 'KCMAY1','2026-06-09','KC' -> 'KCK6'.
+    _generic_to_ice_code is CT-hardcoded (parse_futures_my requires 'CT'); this
+    works for any prefix via parse_futures_my_generic."""
+    parsed = parse_futures_my_generic(contract, date_str, prefix)
+    if not parsed:
+        return None
+    month_num, year = parsed
+    _inv = {v: k for k, v in MONTH_CODE.items()}
+    mc = _inv.get(month_num)
+    if not mc:
+        return None
+    return f"{prefix}{mc}{str(year)[-1]}"
+
+
 # CT serial option months and their underlying standard futures month.
 # Cotton only has 4 serial option months — no Apr, Jun, or Aug serials exist.
 CT_SERIAL_FUTURES = {
@@ -3102,8 +3117,10 @@ def _load_generic_data(commodity):
                 # Watcher writes ICE codes (KCN6, 4 chars); feed-history rows are
                 # old ordinal format (KCMAR1, 6 chars) — translate the latter to
                 # ICE code so the key matches live_futures (ICE-keyed from RTD).
+                # Must use the prefix-aware translator (_generic_to_ice_code is
+                # CT-hardcoded and returns None for KC -> orphan keys / no-op).
                 _tkr = _tkr_raw if len(_tkr_raw) == 4 \
-                       else (_generic_to_ice_code(_tkr_raw, _fut_last) or _tkr_raw)
+                       else (_ordinal_to_ice_code(_tkr_raw, _fut_last, prefix) or _tkr_raw)
                 if _tkr not in live_futures:
                     live_futures[_tkr] = {}
                 _lf = live_futures[_tkr]
