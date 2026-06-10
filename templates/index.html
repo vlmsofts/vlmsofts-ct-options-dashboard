@@ -4294,10 +4294,25 @@ function draftEodEmail(){
 }
 
 function saveEodSnapshot(){
+  const btn = document.getElementById('eod-snapshot-btn');
+  const orig = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
   fetch('/api/save-eod-snapshot', {method: 'POST'})
     .then(r => r.json())
-    .then(j => console.log('save-eod-snapshot:', j))
-    .catch(e => console.log('save-eod-snapshot error:', e));
+    .then(j => {
+      console.log('save-eod-snapshot:', j);
+      if(btn){
+        btn.textContent = j && j.error ? '✗ ' + (j.error.slice(0,24)) : '✓ Saved';
+        setTimeout(()=>{ btn.textContent = orig; btn.disabled = false; }, 2500);
+      }
+    })
+    .catch(e => {
+      console.log('save-eod-snapshot error:', e);
+      if(btn){
+        btn.textContent = '✗ Failed';
+        setTimeout(()=>{ btn.textContent = orig; btn.disabled = false; }, 3000);
+      }
+    });
 }
 
 function _buildEodCanvas(data){
