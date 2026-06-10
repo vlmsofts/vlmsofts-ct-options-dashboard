@@ -2079,6 +2079,20 @@ function renderMESmile(){
 }
 
 // ── Vol Surface panel ─────────────────────────────────────────────────────────
+// A surface row carries a "real smile" only if it has at least one populated
+// put wing, OR its call buckets actually differ (skew present). Flat-echo far
+// months — all puts blank and every non-null call equal to ATM — return false.
+// cells index layout: 0-3 = put wings, 4 = ATM, 5-8 = call wings.
+function surfRowHasSmile(cells){
+  const hasPutWing = cells.slice(0,4).some(v=>v!=null);
+  if(hasPutWing) return true;
+  const calls = cells.slice(5).filter(v=>v!=null);
+  if(calls.length === 0) return false;            // no wings at all
+  const atm = cells[4];
+  // Flat echo: every call wing equals ATM (within rounding). Any deviation = real skew.
+  return calls.some(v => atm == null || Math.abs(v - atm) > 0.05);
+}
+
 function loadSurface(){
   const r = getRFR();
 
@@ -2159,11 +2173,13 @@ function loadSurface(){
 
     if(D.live_smile && D.live_smile[ticker]) _surfHasLive = true;
     const cells = DELTAS.map(d=>getIVatDelta(d.target,d.isCall));
-    // Drop rows where every delta bucket is blank (far months with no smile and
-    // no settle wing prices — only ATM would render). Skip ATM (index 4) from the
-    // test; it comes from a different source and is present even on dead months.
-    const _hasAnyDelta = cells.some((v,i)=>i!==4 && v!=null);
-    if(_dropBlankRows && !_hasAnyDelta) continue;
+    // Drop far months that have no real smile (KC only; CT unchanged). Two cases:
+    //  (a) every delta bucket blank — only ATM would render; and
+    //  (b) flat-echo rows — all put wings blank AND the call buckets are just the
+    //      ATM value repeated (no skew). These render call cells but carry no info.
+    // Skip ATM (index 4) throughout; it has its own source and exists even on
+    // dead months.
+    if(_dropBlankRows && !surfRowHasSmile(cells)) continue;
     _surfRows.push(ticker);
     // cells[2]=25D Put, cells[6]=25D Call — derive skew from same source as table
     const _p25 = cells[2], _c25 = cells[6];
@@ -2544,8 +2560,8 @@ function exportSurfacePanel(){
 
     if(lsm) _exportHasLive = true;
     const cells = DELTAS.map(d=>ivAtDelta(d.target, d.isCall));
-    // Drop all-blank far months (only ATM populated) — match the on-screen table.
-    if(_dropBlankRows && !cells.some((v,i)=>i!==4 && v!=null)) continue;
+    // Drop no-real-smile far months — match the on-screen table (see surfRowHasSmile).
+    if(_dropBlankRows && !surfRowHasSmile(cells)) continue;
     const hv    = (D.hv_data && D.hv_data[ticker]) || {};
     const _ep25=cells[2], _ec25=cells[6];
     const skew = (_ep25!=null&&_ec25!=null) ? +(_ep25-_ec25).toFixed(2) : (D.skew_value[ticker]??null);
