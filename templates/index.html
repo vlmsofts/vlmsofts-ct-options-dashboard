@@ -3784,7 +3784,7 @@ function renderStraddles(){
     const bg = i % 2 === 0 ? '#ffffff' : '#f0f4fb';
     tbody.innerHTML += `<tr style="background:${bg}">
       <td style="${TDL};font-weight:700;color:#1a3a6e">${r.label || r.ticker}</td>
-      <td style="${TDR}">${r.strike != null ? r.strike.toFixed(0) : '—'}</td>
+      <td style="${TDR}">${r.strike != null ? (Number.isInteger(r.strike) ? r.strike.toFixed(0) : r.strike.toFixed(1)) : '—'}</td>
       <td style="${TDR};font-weight:600">${fmt2(r.value)}</td>
       <td style="${TDR}">${fmtVol(r.atm_vol)}</td>
       <td style="${TDR};color:${negClr(r.chg_vol)}">${fmtSgn(r.chg_vol)}</td>
@@ -3917,7 +3917,7 @@ function exportStraddlePanel(){
 
     const vals = [
       { v: r.label || r.ticker,                            color: C.lblCol, bold: true,  align: 'left'  },
-      { v: r.strike != null ? r.strike.toFixed(0) : '—',  color: C.txt,                 align: 'right' },
+      { v: r.strike != null ? (Number.isInteger(r.strike) ? r.strike.toFixed(0) : r.strike.toFixed(1)) : '—',  color: C.txt,                 align: 'right' },
       { v: fmt2(r.value),                                  color: C.txt,    bold: true,  align: 'right' },
       { v: fmtVol(r.atm_vol),                              color: C.txt,                 align: 'right' },
       { v: fmtSgn(r.chg_vol),                              color: negClr(r.chg_vol),     align: 'right' },
