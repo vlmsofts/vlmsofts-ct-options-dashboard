@@ -342,6 +342,11 @@ tr:hover td{background:var(--surf2)}
     <span id="data-date"></span>
     <button class="btn-export" onclick="openExport()">&#x1F4F7; EXPORT</button>
     <button id="btn-push" class="btn-push" onclick="pushToSite()">&#8679; PUSH TO SITE</button>
+    <!-- Non-CT push button: inert until vlmdata is wired for KC/SB/CC. Kept
+         separate from #btn-push so a non-CT push can never reach /push-to-vlm
+         (which writes the CT-only EOD snapshot). See memory: project_eod_snapshot_push. -->
+    <button id="btn-push-kc" class="btn-push" style="display:none;opacity:.55;cursor:not-allowed"
+            onclick="pushToSiteStub()" title="Push to Site is not yet wired for this commodity">&#8679; PUSH TO SITE</button>
   </div>
 </div>
 
@@ -1021,6 +1026,10 @@ function init(){
 
   // Templates
   buildTemplateUI();
+
+  // Show the correct push button for the current commodity (CT real, others stub).
+  // init() runs on first load AND on commodity switch (loadAndRender → init).
+  updatePushBtn();
 }
 
 // ── Live futures bar ──────────────────────────────────────────────────────────
@@ -3980,11 +3989,27 @@ const _PUSH_TYPE   = {
 };
 
 function updatePushBtn(){
-  const btn = document.getElementById('btn-push');
+  const btn  = document.getElementById('btn-push');
   if(!btn) return;
   const p = document.querySelector('.panel.active');
   const panelId = p ? p.id : '';
-  btn.style.display = (panelId === 'panel-trade') ? 'none' : '';
+  // Hidden on the trade panel for both buttons (unchanged rule).
+  const onTrade = (panelId === 'panel-trade');
+  // CT keeps the real Push-to-Site button. Non-CT (KC/SB/CC) gets the inert stub
+  // so a non-CT push can never reach /push-to-vlm (CT-only EOD snapshot writer).
+  const isCT = (D.commodity || 'CT') === 'CT';
+  btn.style.display = (onTrade || !isCT) ? 'none' : '';
+  const stub = document.getElementById('btn-push-kc');
+  if(stub) stub.style.display = (onTrade || isCT) ? 'none' : '';
+}
+
+function pushToSiteStub(){
+  // Non-CT push is intentionally not wired to vlmdata yet. No-op with a hint.
+  const b = document.getElementById('btn-push-kc');
+  if(!b) return;
+  const t = b.textContent;
+  b.textContent = 'Not wired yet';
+  setTimeout(()=>{ b.textContent = t; }, 1800);
 }
 
 function _buildSkewCombinedPng(){

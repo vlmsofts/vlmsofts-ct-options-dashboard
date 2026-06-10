@@ -4274,6 +4274,80 @@ def api_eod_email():
     return jsonify(data)
 
 
+# Destination consumed by market-intelligence/append_backfill.py (path confirmed
+# by the market-intelligence dashboard, 2026-06-10). Single source of truth for
+# both the manual "Save Snapshot" button and the Push-to-Site side-effect.
+_EOD_SNAPSHOT_PATH = os.path.join(
+    r'C:\Users\Louis\OneDrive - VLM Commodities LTD\Desktop',
+    'market-intelligence', 'data', 'eod_snapshot.json'
+)
+
+
+def _write_eod_snapshot(data, skip_if_same_date=False):
+    """Extract the compact CT snapshot from already-assembled EOD `data` and write
+    it to _EOD_SNAPSHOT_PATH. Returns (extracted_dict, wrote_bool).
+
+    This is the exact extract+write logic that used to live inline in
+    api_save_eod_snapshot(); both that endpoint and push_to_vlm() now call it so
+    the logic has one home. CT-only by construction — `data` comes from
+    _assemble_eod_data() which is hardcoded load_data('CT').
+
+    skip_if_same_date: when True, if the file already exists and its 'date' equals
+    data['date'], skip the write (one-write-per-date failsafe for the push path).
+    The manual button passes False → behaves exactly as before (always writes).
+    """
+    # Standard CT delivery months only (Mar/May/Jul/Dec), matched on label text.
+    _STD_LABELS = ('Mar', 'May', 'Jul', 'Dec')
+    def _is_std(row):
+        lbl = (row.get('label') or '')
+        return any(m in lbl for m in _STD_LABELS)
+
+    std_futs   = [f for f in data.get('futures', [])   if _is_std(f)]
+    std_strads = [s for s in data.get('straddles', []) if _is_std(s)]
+    hv         = data.get('hv', [])
+
+    def _settle(i):
+        return std_futs[i]['settle'] if i < len(std_futs) else None
+
+    # atm_iv_30d: first standard straddle with dte >= 30; atm_vol already in %.
+    atm_iv_30d = None
+    for s in std_strads:
+        dte = s.get('dte')
+        if dte is not None and dte >= 30:
+            av = s.get('atm_vol')
+            atm_iv_30d = round(av, 2) if av is not None else None
+            break
+
+    hv0  = hv[0] if hv else {}
+    hv30 = round(hv0['hv30'] * 100, 2) if hv0.get('hv30') is not None else None
+    hv60 = round(hv0['hv60'] * 100, 2) if hv0.get('hv60') is not None else None
+
+    extracted = {
+        'date':       data.get('date'),
+        'ct1_settle': _settle(0),
+        'ct2_settle': _settle(1),
+        'ct3_settle': _settle(2),
+        'atm_iv_30d': atm_iv_30d,
+        'hv30':       hv30,
+        'hv60':       hv60,
+    }
+
+    # One-write-per-date failsafe (push path only): if the file already holds this
+    # date, leave it untouched.
+    if skip_if_same_date and extracted.get('date') is not None:
+        try:
+            with open(_EOD_SNAPSHOT_PATH, encoding='utf-8') as f:
+                if json.load(f).get('date') == extracted['date']:
+                    return extracted, False
+        except (FileNotFoundError, ValueError):
+            pass  # no file yet / unreadable → proceed to write
+
+    os.makedirs(os.path.dirname(_EOD_SNAPSHOT_PATH), exist_ok=True)
+    with open(_EOD_SNAPSHOT_PATH, 'w', encoding='utf-8') as f:
+        json.dump(extracted, f, indent=2)
+    return extracted, True
+
+
 @server.route('/api/save-eod-snapshot', methods=['POST'])
 def api_save_eod_snapshot():
     """
@@ -4287,52 +4361,9 @@ def api_save_eod_snapshot():
     if 'error' in data:
         return jsonify({'success': False, 'error': data['error']}), 500
 
-    # Standard CT delivery months only (Mar/May/Jul/Dec), matched on label text.
-    _STD_LABELS = ('Mar', 'May', 'Jul', 'Dec')
-    def _is_std(row):
-        lbl = (row.get('label') or '')
-        return any(m in lbl for m in _STD_LABELS)
-
     try:
-        std_futs   = [f for f in data.get('futures', [])   if _is_std(f)]
-        std_strads = [s for s in data.get('straddles', []) if _is_std(s)]
-        hv         = data.get('hv', [])
-
-        def _settle(i):
-            return std_futs[i]['settle'] if i < len(std_futs) else None
-
-        # atm_iv_30d: first standard straddle with dte >= 30; atm_vol already in %.
-        atm_iv_30d = None
-        for s in std_strads:
-            dte = s.get('dte')
-            if dte is not None and dte >= 30:
-                av = s.get('atm_vol')
-                atm_iv_30d = round(av, 2) if av is not None else None
-                break
-
-        hv0  = hv[0] if hv else {}
-        hv30 = round(hv0['hv30'] * 100, 2) if hv0.get('hv30') is not None else None
-        hv60 = round(hv0['hv60'] * 100, 2) if hv0.get('hv60') is not None else None
-
-        extracted = {
-            'date':       data.get('date'),
-            'ct1_settle': _settle(0),
-            'ct2_settle': _settle(1),
-            'ct3_settle': _settle(2),
-            'atm_iv_30d': atm_iv_30d,
-            'hv30':       hv30,
-            'hv60':       hv60,
-        }
-
-        out_path = os.path.join(
-            r'C:\Users\Louis\OneDrive - VLM Commodities LTD\Desktop',
-            'market-intelligence', 'data', 'eod_snapshot.json'
-        )
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with open(out_path, 'w', encoding='utf-8') as f:
-            json.dump(extracted, f, indent=2)
-
-        return jsonify({'success': True, 'path': out_path, 'data': extracted})
+        extracted, _ = _write_eod_snapshot(data)
+        return jsonify({'success': True, 'path': _EOD_SNAPSHOT_PATH, 'data': extracted})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -4436,6 +4467,21 @@ def push_to_vlm():
         resp = requests.post(_VLM_PUSH_URL,
                              headers={'x-push-secret': _VLM_PUSH_SECRET},
                              files=files, data=data, timeout=30)
+
+        # Side-effect: on a successful upstream push, also write the CT EOD
+        # snapshot that market-intelligence/append_backfill.py consumes. This is
+        # the reliable daily writer (the manual "Save Snapshot" step gets missed).
+        # CT-only by construction (only the CT tab reaches this endpoint; KC/SB/CC
+        # use a separate button). One-write-per-date via skip_if_same_date. Fully
+        # isolated: any failure here must NEVER break or delay the push response.
+        if 200 <= resp.status_code < 300:
+            try:
+                _eod_data = _assemble_eod_data()
+                if 'error' not in _eod_data:
+                    _write_eod_snapshot(_eod_data, skip_if_same_date=True)
+            except Exception:
+                pass  # snapshot is best-effort; never affect the push result
+
         return jsonify({}), resp.status_code
     except Exception as e:
         return jsonify({'error': str(e)}), 502
