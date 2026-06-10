@@ -4468,12 +4468,12 @@ function _buildEodCanvas(data){
 
   const stradData = stradSrc.map(r=>[
     {v:r.label||r.ticker||'—',                      color:C.lblCol, bold:true, align:'left'},
-    {v:r.strike!=null?(+r.strike).toFixed(0):'—',   color:C.txt,              align:'right'},
+    {v:r.strike!=null?(Number.isInteger(r.strike)?r.strike.toFixed(0):r.strike.toFixed(1)):'—', color:C.txt, align:'right'},
     {v:f2(r.value),                                  color:C.txt,   bold:true, align:'right'},
     {v:fvol(r.atm_vol),                              color:C.txt,              align:'right'},
-    {v:fsgn(r.chg_vol),                              color:clr(r.chg_vol),     align:'right'},
+    {v:fsgn(r.eod_chg_vol??r.chg_vol),               color:clr(r.eod_chg_vol??r.chg_vol),  align:'right'},
     {v:f2(r.prev),                                   color:C.txt,              align:'right'},
-    {v:fsgn(r.change),                               color:clr(r.change),      align:'right'},
+    {v:fsgn(r.eod_change??r.change),                 color:clr(r.eod_change??r.change),     align:'right'},
     {v:r.dte!=null?String(r.dte):'—',               color:C.txt,              align:'right'},
     {v:fmtE(r.expiry),                               color:'#555',             align:'right'},
     {v:f2(r.breakeven),                              color:C.txt,              align:'right'},

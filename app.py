@@ -3427,24 +3427,81 @@ def _load_generic_data(commodity):
         if chg_vol is not None:
             atm_iv_1d_chg[ticker] = chg_vol
 
+        # EOD day-over-day Δ: today's SETTLE straddle vs YESTERDAY's SETTLE straddle.
+        # The live `change`/`chg_vol` above compare live-vs-today's-settle, which read
+        # 0.00 after the close. The EOD summary wants the overnight settle move instead.
+        # Compute a settle straddle (value + IV) for a CSV date at that date's own ATM:
+        # value = nearest-strike C+P from the CSV, IV via B76 at that date's forward.
+        def _settle_straddle(date_str, m, y):
+            d_fwd = get_hist_fwd_generic(m, y, date_str) or fwd_settle
+            d_rows = opts_by_ticker_date.get((ticker, date_str), [])
+            if not d_rows or not d_fwd or d_fwd <= 0:
+                return None, None
+            d_strikes = sorted(set(r['strike'] for r in d_rows))
+            if not d_strikes:
+                return None, None
+            d_atm = min(d_strikes, key=lambda k: abs(k - d_fwd))
+            _inc = cfg.get('strike_increment')
+            if _inc:
+                d_atm = round(d_atm / _inc) * _inc
+            d_c = d_p = None
+            for r in d_rows:
+                if abs(r['strike'] - d_atm) >= 0.01 or r['px'] <= 0:
+                    continue
+                if r['pc'] == 'Call':
+                    d_c = r['px']
+                elif r['pc'] == 'Put':
+                    d_p = r['px']
+            if not (d_c and d_p):
+                return None, None
+            d_val = round(d_c + d_p, 2)
+            try:
+                d_dte = max(0, (datetime.strptime(lt, '%Y-%m-%d') -
+                                datetime.strptime(date_str, '%Y-%m-%d')).days)
+            except ValueError:
+                d_dte = dte
+            d_T = d_dte / 365.0 if d_dte > 0 else T
+            d_iv = None
+            if d_T > 0:
+                d_df = math.exp(-RISK_FREE * d_T)
+                d_ceq = (d_val + (d_fwd - d_atm) * d_df) / 2.0
+                if d_ceq > 0:
+                    _iv = implied_vol(d_ceq, d_fwd, d_atm, d_T, RISK_FREE, True)
+                    if _iv:
+                        d_iv = round(_iv * 100, 2)
+            return d_val, d_iv
+
+        _par = parse_generic_ticker(ticker, prefix)
+        eod_today_val, eod_today_iv = prev_val, settle_iv_pct
+        eod_yest_val = eod_yest_iv = None
+        if _par and prev_date != last_date:
+            eod_yest_val, eod_yest_iv = _settle_straddle(prev_date, _par[2], _par[1])
+        eod_change = round(eod_today_val - eod_yest_val, 2) \
+            if (eod_today_val is not None and eod_yest_val is not None) else None
+        eod_chg_vol = round(eod_today_iv - eod_yest_iv, 2) \
+            if (eod_today_iv is not None and eod_yest_iv is not None) else None
+
         try:
             breakeven = round(atm * (iv_pct / 100.0) / math.sqrt(252), 2) if iv_pct else None
         except (ValueError, ZeroDivisionError):
             breakeven = None
 
         straddles.append({
-            'ticker':    ticker,
-            'label':     label,
-            'forward':   round(fwd, 2),
-            'strike':    atm,
-            'value':     val,
-            'atm_vol':   iv_pct,
-            'chg_vol':   chg_vol,
-            'prev':      prev_val,
-            'change':    chg,
-            'dte':       dte,
-            'expiry':    lt,
-            'breakeven': breakeven,
+            'ticker':      ticker,
+            'label':       label,
+            'forward':     round(fwd, 2),
+            'strike':      atm,
+            'value':       val,
+            'atm_vol':     iv_pct,
+            'chg_vol':     chg_vol,
+            'prev':        prev_val,
+            'change':      chg,
+            'dte':         dte,
+            'expiry':      lt,
+            'breakeven':   breakeven,
+            'eod_change':  eod_change,
+            'eod_chg_vol': eod_chg_vol,
+            'eod_yest':    eod_yest_val,
         })
 
     _persist_today_generic(commodity)
