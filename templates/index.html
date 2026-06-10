@@ -4128,7 +4128,10 @@ function openEodEmail(){
 
 function _buildEodData(){
   const MC  = {F:1,G:2,H:3,J:4,K:5,M:6,N:7,Q:8,U:9,V:10,X:11,Z:12};
-  const STD = new Set([3,5,7,12]);
+  // Standard futures months by commodity. CT = Mar/May/Jul/Dec (no Sep).
+  // KC = Mar/May/Jul/Sep/Dec (Sep included — otherwise KCU6/KCU7 are dropped).
+  const _comm = D.commodity || 'CT';
+  const STD = new Set(_comm === 'CT' ? [3,5,7,12] : [3,5,7,9,12]);
   function parseTkr(t){
     const m = t && t.match(/^[A-Z]{2}([FGHJKMNQUVXZ])(\d+)$/);
     if(!m) return null;
@@ -4179,7 +4182,8 @@ function _buildEodData(){
       const sc=(ss!=null&&sy!=null)?+((ss-sy).toFixed(4)):null;
       const sp=(sc!=null&&sy&&sy!==0)?+((sc/Math.abs(sy)*100).toFixed(4)):null;
       spreadRows.push({display:s.display,settle:ss,yest_settle:sy,
-                       change:sc,pct_chg:sp,high:s.high??null,low:s.low??null,volume:s.volume??null});
+                       change:sc,pct_chg:sp,high:s.high??null,low:s.low??null,volume:s.volume??null,
+                       block_vol:s.block_vol??null});
       return;
     }
     // Computed fallback — outright settle difference; High/Low not available
@@ -4195,7 +4199,7 @@ function _buildEodData(){
     const disp = pn&&pf
       ? `${_mn[pn.month]}${String(pn.year).slice(-2)}/${_mn[pf.month]}${String(pf.year).slice(-2)}`
       : key;
-    spreadRows.push({display:disp,settle:stt,yest_settle:yest,change:chg,pct_chg:pct,high:null,low:null,volume:null});
+    spreadRows.push({display:disp,settle:stt,yest_settle:yest,change:chg,pct_chg:pct,high:null,low:null,volume:null,block_vol:null});
   }
 
   for(let i=0;i<stdTkrs.length-1;i++){
@@ -4213,6 +4217,7 @@ function _buildEodData(){
     .map(t=>{ const h=hvSrc[t]||{}; return {label:labels[t]||t,hv10:h.hv10,hv30:h.hv30,hv60:h.hv60,hv90:h.hv90}; });
 
   return {
+    commodity: _comm,
     date:      D.today_str || D.last_date || new Date().toISOString().slice(0,10),
     time_et:   timeStr,
     straddles: D.straddles || [],
@@ -4269,7 +4274,8 @@ function draftEodEmail(){
     ? (([y,mo,d])=>`${+d} ${_m[+mo]} ${y}`)(_eodData.date.split('-'))
     : new Date().toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric'});
 
-  const subject = `VLM Cotton EOD Summary — ${dateStr}`;
+  const _eodCommName = ({CT:'Cotton', KC:'Coffee', SB:'Sugar', CC:'Cocoa'})[_eodData.commodity || 'CT'] || 'Cotton';
+  const subject = `VLM ${_eodCommName} EOD Summary — ${dateStr}`;
   const pngB64  = _eodCanvas.toDataURL('image/png');
 
   // POST to Flask → win32com opens Outlook desktop with PNG inline
@@ -4283,8 +4289,9 @@ function draftEodEmail(){
     if(j.error){
       // Fallback: download PNG + mailto if Outlook COM unavailable
       downloadEodPng();
+      const _eodNameB = ({CT:'ICE Cotton No. 2', KC:'ICE Coffee C', SB:'ICE Sugar No. 11', CC:'ICE Cocoa'})[_eodData.commodity || 'CT'] || 'ICE Cotton No. 2';
       window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(
-        `ICE Cotton No. 2 — End of Day Summary\r\nDate: ${dateStr}\r\n\r\nPlease attach the PNG.`)}`;
+        `${_eodNameB} — End of Day Summary\r\nDate: ${dateStr}\r\n\r\nPlease attach the PNG.`)}`;
     }
   })
   .catch(()=>{
@@ -4360,7 +4367,11 @@ function _buildEodCanvas(data){
 
   const STRAD_W = [200, 96,108,120,120,120, 96, 72,160,108];
   const FUT_W   = [160, 90,100, 84, 84, 84, 84, 96, 72, 72, 72, 96,106];
-  const SPR_W   = [220,140,144,138,128,112,112,206]; // 8 cols — sum=1200
+  // CT: 8 cols (no Block). KC: 9 cols incl Block. Both sum to 1200.
+  const _eodComm = data.commodity || 'CT';
+  const SPR_W = _eodComm === 'CT'
+    ? [220,140,144,138,128,112,112,206]                 // 8 cols  — sum=1200
+    : [210,132,138,128,120,104,104,150,114];            // 9 cols incl Block — sum=1200
   const HV_W    = [240,240,240,240,240];
 
   const stradSrc = (data.straddles||[]).filter(r=>r.chg_vol==null||Math.abs(r.chg_vol)<=15);
@@ -4398,7 +4409,8 @@ function _buildEodCanvas(data){
   ctx.fillStyle = C.dim;
   ctx.font = 'bold 12px Arial';
   ctx.textAlign = 'left';
-  ctx.fillText('VLM COMMODITIES  —  ICE COTTON No. 2', PAD, 20);
+  const _eodName = ({CT:'ICE COTTON No. 2', KC:'ICE COFFEE C', SB:'ICE SUGAR No. 11', CC:'ICE COCOA'})[_eodComm] || 'ICE COTTON No. 2';
+  ctx.fillText('VLM COMMODITIES  —  ' + _eodName, PAD, 20);
 
   // Main title in gold
   ctx.fillStyle = C.gold;
@@ -4483,16 +4495,21 @@ function _buildEodCanvas(data){
     {v:r.oi_chg!=null?((+r.oi_chg)>=0?'+':'')+Math.round(+r.oi_chg):'—', color:clr(r.oi_chg), align:'right'},
   ]);
 
-  const sprData = sprSrc.map(r=>[
-    {v:r.display||'—',    color:C.lblCol, bold:true, align:'left'},
-    {v:f2(r.settle),      color:C.txt,   bold:true, align:'right'},
-    {v:f2(r.yest_settle), color:C.txt,              align:'right'},
-    {v:fsgn(r.change),    color:clr(r.change),      align:'right'},
-    {v:fpct(r.pct_chg),   color:clr(r.pct_chg),     align:'right'},
-    {v:f2(r.high),        color:C.txt,              align:'right'},
-    {v:f2(r.low),         color:C.txt,              align:'right'},
-    {v:f0(r.volume),      color:C.txt,              align:'right'},
-  ]);
+  const _sprBlock = _eodComm !== 'CT';   // KC etc. get a Block column
+  const sprData = sprSrc.map(r=>{
+    const cells = [
+      {v:r.display||'—',    color:C.lblCol, bold:true, align:'left'},
+      {v:f2(r.settle),      color:C.txt,   bold:true, align:'right'},
+      {v:f2(r.yest_settle), color:C.txt,              align:'right'},
+      {v:fsgn(r.change),    color:clr(r.change),      align:'right'},
+      {v:fpct(r.pct_chg),   color:clr(r.pct_chg),     align:'right'},
+      {v:f2(r.high),        color:C.txt,              align:'right'},
+      {v:f2(r.low),         color:C.txt,              align:'right'},
+      {v:f0(r.volume),      color:C.txt,              align:'right'},
+    ];
+    if(_sprBlock) cells.push({v:fz(r.block_vol), color:C.txt, align:'right'});
+    return cells;
+  });
 
   const hvData = hvSrc.map(r=>[
     {v:r.label||'—', color:C.lblCol, bold:true, align:'left'},
@@ -4510,7 +4527,9 @@ function _buildEodCanvas(data){
     ['Contract','Settle','Yest. Settle','Change','% Chg','High','Low','Volume','EFP','EFS','Block','OI','OI Chg'],
     FUT_W, futData) + GAP;
   y += drawSection(y, 'SPREADS',
-    ['Spread','Settle','Yest. Settle','Change','% Chg','High','Low','Volume'],
+    _sprBlock
+      ? ['Spread','Settle','Yest. Settle','Change','% Chg','High','Low','Volume','Block']
+      : ['Spread','Settle','Yest. Settle','Change','% Chg','High','Low','Volume'],
     SPR_W, sprData) + GAP;
   y += drawSection(y, 'HISTORICAL VOLATILITY',
     ['Contract','HV10','HV30','HV60','HV90'],
@@ -4523,8 +4542,9 @@ function _buildEodCanvas(data){
   ctx.font = '12px Arial';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const _eodNameF = ({CT:'ICE Cotton No. 2', KC:'ICE Coffee C', SB:'ICE Sugar No. 11', CC:'ICE Cocoa'})[_eodComm] || 'ICE Cotton No. 2';
   ctx.fillText(
-    'VLM Commodities  |  ICE Cotton No. 2  |  ' + (data.date ? fmtD(data.date) : ''),
+    'VLM Commodities  |  ' + _eodNameF + '  |  ' + (data.date ? fmtD(data.date) : ''),
     TW/2, y + FOOTER_H/2
   );
 
