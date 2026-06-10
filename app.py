@@ -4348,6 +4348,41 @@ def _write_eod_snapshot(data, skip_if_same_date=False):
     return extracted, True
 
 
+# append_backfill.py (market-intelligence) reads eod_snapshot.json and appends one
+# EOD row to the backfill CSV. Path confirmed by the market-intelligence dashboard
+# (2026-06-10). It has its own duplicate-date guard (sys.exit if the date already
+# exists), so a re-run for the same date is a safe no-op.
+_APPEND_BACKFILL_PY = os.path.join(
+    r'C:\Users\Louis\OneDrive - VLM Commodities LTD\Desktop',
+    'market-intelligence', 'append_backfill.py'
+)
+
+
+def _spawn_append_backfill():
+    """Fire-and-forget: run append_backfill.py in a detached child process after a
+    NEW-date snapshot write, so EOD backfill needs zero manual steps. Runs in a
+    daemon thread (request never blocks/joins). Detached + silent on Windows
+    (CREATE_NO_WINDOW, output to a log file). Any failure — missing script, error,
+    timeout — is swallowed and never surfaces to the push response."""
+    def _run():
+        import subprocess, sys
+        try:
+            if not os.path.exists(_APPEND_BACKFILL_PY):
+                return
+            _wd  = os.path.dirname(_APPEND_BACKFILL_PY)
+            _log = os.path.join(_wd, 'append_backfill_last.log')
+            with open(_log, 'w', encoding='utf-8') as lf:
+                subprocess.run(
+                    [sys.executable, _APPEND_BACKFILL_PY],
+                    cwd=_wd, stdout=lf, stderr=lf,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+                    timeout=120,
+                )
+        except Exception:
+            pass  # best-effort; never affect the push
+    threading.Thread(target=_run, daemon=True).start()
+
+
 @server.route('/api/save-eod-snapshot', methods=['POST'])
 def api_save_eod_snapshot():
     """
@@ -4478,7 +4513,12 @@ def push_to_vlm():
             try:
                 _eod_data = _assemble_eod_data()
                 if 'error' not in _eod_data:
-                    _write_eod_snapshot(_eod_data, skip_if_same_date=True)
+                    _extracted, _wrote = _write_eod_snapshot(_eod_data, skip_if_same_date=True)
+                    # New date actually written → auto-run append_backfill.py (zero
+                    # manual steps). Skipped on same-date (_wrote False) or error.
+                    # Fire-and-forget; never blocks/breaks the push response.
+                    if _wrote:
+                        _spawn_append_backfill()
             except Exception:
                 pass  # snapshot is best-effort; never affect the push result
 
