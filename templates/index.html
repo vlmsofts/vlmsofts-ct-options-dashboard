@@ -2079,20 +2079,6 @@ function renderMESmile(){
 }
 
 // ── Vol Surface panel ─────────────────────────────────────────────────────────
-// A surface row carries a "real smile" only if it has at least one populated
-// put wing, OR its call buckets actually differ (skew present). Flat-echo far
-// months — all puts blank and every non-null call equal to ATM — return false.
-// cells index layout: 0-3 = put wings, 4 = ATM, 5-8 = call wings.
-function surfRowHasSmile(cells){
-  const hasPutWing = cells.slice(0,4).some(v=>v!=null);
-  if(hasPutWing) return true;
-  const calls = cells.slice(5).filter(v=>v!=null);
-  if(calls.length === 0) return false;            // no wings at all
-  const atm = cells[4];
-  // Flat echo: every call wing equals ATM (within rounding). Any deviation = real skew.
-  return calls.some(v => atm == null || Math.abs(v - atm) > 0.05);
-}
-
 function loadSurface(){
   const r = getRFR();
 
@@ -2162,6 +2148,15 @@ function loadSurface(){
           if(d0<=targetDelta&&targetDelta<=d1)
             return Math.abs(d1-d0)<1e-6 ? v0 : v0+(targetDelta-d0)/(d1-d0)*(v1-v0);
         }
+        // No bracketing pair (sparse smile — e.g. the strike nearest this delta
+        // was filtered out). KC only: clamp to the nearest available smile point
+        // rather than dropping the cell, but only if it's reasonably close in
+        // delta so we don't fabricate a far wing from a near point. CT unchanged.
+        if(_dropBlankRows && pts.length){
+          let best=null, bestDiff=Infinity;
+          for(const[d,v] of pts){ const diff=Math.abs(d-targetDelta); if(diff<bestDiff){bestDiff=diff;best=v;} }
+          if(best!=null && bestDiff<=0.12) return best;
+        }
       }
       // Fallback: settle CSV
       const k   = findDeltaStrike(targetDelta, isCall);
@@ -2171,15 +2166,13 @@ function loadSurface(){
       return iv ? iv*100 : null;
     }
 
-    if(D.live_smile && D.live_smile[ticker]) _surfHasLive = true;
+    const _hasLiveSmile = !!(D.live_smile && D.live_smile[ticker]);
+    if(_hasLiveSmile) _surfHasLive = true;
+    // KC: show ONLY months we have a live RTD smile for (CT unchanged). Far
+    // months with no feed (KCN7/U7/Z7/H8) render echoed settle values with blank
+    // put wings — drop them. KCQ6 has a live smile, so it stays.
+    if(_dropBlankRows && !_hasLiveSmile) continue;
     const cells = DELTAS.map(d=>getIVatDelta(d.target,d.isCall));
-    // Drop far months that have no real smile (KC only; CT unchanged). Two cases:
-    //  (a) every delta bucket blank — only ATM would render; and
-    //  (b) flat-echo rows — all put wings blank AND the call buckets are just the
-    //      ATM value repeated (no skew). These render call cells but carry no info.
-    // Skip ATM (index 4) throughout; it has its own source and exists even on
-    // dead months.
-    if(_dropBlankRows && !surfRowHasSmile(cells)) continue;
     _surfRows.push(ticker);
     // cells[2]=25D Put, cells[6]=25D Call — derive skew from same source as table
     const _p25 = cells[2], _c25 = cells[6];
@@ -2550,6 +2543,12 @@ function exportSurfacePanel(){
           const[d0,v0]=pts[i],[d1,v1]=pts[i+1];
           if(d0<=tgt&&tgt<=d1) return Math.abs(d1-d0)<1e-6?v0:v0+(tgt-d0)/(d1-d0)*(v1-v0);
         }
+        // KC only: clamp to nearest point when unbracketed — match the table.
+        if(_dropBlankRows && pts.length){
+          let best=null, bestDiff=Infinity;
+          for(const[d,v] of pts){ const diff=Math.abs(d-tgt); if(diff<bestDiff){bestDiff=diff;best=v;} }
+          if(best!=null && bestDiff<=0.12) return best;
+        }
       }
       const k=findDK(tgt,isC);
       const mkt=getChainPx(ticker,k,isC?'Call':'Put');
@@ -2559,9 +2558,9 @@ function exportSurfacePanel(){
     }
 
     if(lsm) _exportHasLive = true;
+    // KC: only months with a live RTD smile — match the on-screen table.
+    if(_dropBlankRows && !lsm) continue;
     const cells = DELTAS.map(d=>ivAtDelta(d.target, d.isCall));
-    // Drop no-real-smile far months — match the on-screen table (see surfRowHasSmile).
-    if(_dropBlankRows && !surfRowHasSmile(cells)) continue;
     const hv    = (D.hv_data && D.hv_data[ticker]) || {};
     const _ep25=cells[2], _ec25=cells[6];
     const skew = (_ep25!=null&&_ec25!=null) ? +(_ep25-_ec25).toFixed(2) : (D.skew_value[ticker]??null);
