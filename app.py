@@ -146,6 +146,14 @@ COMMODITY_CONFIG = {
         'std_months': frozenset({3, 5, 7, 9, 12}), 'excl_months': frozenset(),
         'serial_map': {8: 9},
         'expiry_override': ICE_KC_EXPIRY,
+        # Straddle DISPLAY filter (display + EOD only — backend data unchanged).
+        # When the RTD workbook is open, the straddle table shows exactly the
+        # option tabs present in it (live_options keys). When RTD is offline,
+        # falls back to this pinned list so the table never blanks. Add a tab in
+        # Excel → it shows live with no restart; to change the OFFLINE fallback,
+        # edit this set and restart. Serial months (Q/V etc.) and sparse far
+        # months are intentionally excluded by not opening tabs for them.
+        'straddle_tickers': frozenset({'KCN6', 'KCU6', 'KCZ6', 'KCH7', 'KCK7'}),
     },
     'SB': {
         'prefix': 'SB', 'name': 'ICE Sugar No. 11',
@@ -2090,6 +2098,23 @@ def _append_projected(path, new_rows):
         w.writerows({k: r.get(k, '') for k in header} for r in new_rows)
 
 
+def _kc_watcher_owns_today(today_str):
+    """True if settle_watcher_kc has confirmed today's KC futures settlement.
+    When True, the GitHub feed must not append today's KC futures row — the
+    watcher's true-ICE-settle row is authoritative. Reads settle_status_kc.json
+    written by settle_watcher_kc.py. Fails open (returns False) so the feed
+    still runs if the status file is missing/unreadable (watcher didn't run)."""
+    try:
+        status_path = os.path.join(os.path.dirname(__file__), 'settle_status_kc.json')
+        if not os.path.exists(status_path):
+            return False
+        with open(status_path, 'r', encoding='utf-8') as f:
+            st = json.load(f)
+        return st.get('date') == today_str and bool(st.get('futures_settled'))
+    except Exception:
+        return False
+
+
 def _persist_today_generic(commodity):
     """Append any dates from GitHub that are newer than local files for KC/SB/CC."""
     cfg = COMMODITY_CONFIG[commodity]
@@ -2133,6 +2158,13 @@ def _persist_today_generic(commodity):
     except Exception as e:
         log.warning('%s opt persist failed: %s', commodity, e)
 
+    # KC failsafe: settle_watcher_kc owns today's KC futures row (true ICE
+    # settle + high/low/spreads from RTD). If it has confirmed today's futures,
+    # do NOT let the GitHub feed (last-trade) append a duplicate/overwriting row.
+    # SB/CC have no watcher yet, so this gate only applies to KC.
+    if commodity == 'KC' and _kc_watcher_owns_today(today_str):
+        return
+
     try:
         if fut_latest < today_str:
             all_rows = fetch_csv(OI_CSV_URL)
@@ -2141,6 +2173,19 @@ def _persist_today_generic(commodity):
                         and r.get('commodity', '').strip().upper() == commodity]
             if new_rows:
                 new_rows.sort(key=lambda r: r.get('date', ''))
+                # KC's local futures file uses cotton's wide schema where the
+                # spread-volume columns are efp_vol/efs_vol/block_vol, but the OI
+                # feed names them efp_volume/efs_volume/block_volume. Alias them
+                # so the feed's high/low/volume/efp/efs/block flow in by name
+                # when the watcher did NOT run. (high/low/volume already match.)
+                if commodity == 'KC':
+                    _alias = {'efp_volume': 'efp_vol',
+                              'efs_volume': 'efs_vol',
+                              'block_volume': 'block_vol'}
+                    for r in new_rows:
+                        for src, dst in _alias.items():
+                            if src in r and not r.get(dst):
+                                r[dst] = r.get(src, '')
                 _append_projected(cfg['fut_csv'], new_rows)
                 log.info('%s: persisted %d fut rows', commodity, len(new_rows))
     except Exception as e:
@@ -3139,7 +3184,20 @@ def _load_generic_data(commodity):
     live_opts_map_s = (rtd.get('live_options') or {}) if rtd else {}
     outrights_map   = (rtd.get('outrights')    or {}) if rtd else {}
 
+    # Straddle DISPLAY filter (display + EOD only; expiry_list/CSV/skew untouched).
+    # When the RTD workbook is open, show exactly the option tabs it contains
+    # (live_options keys) — a tab added in Excel appears with no restart. When
+    # RTD is offline, fall back to the pinned cfg['straddle_tickers'] so the
+    # table never blanks. Only commodities with a 'straddle_tickers' key are
+    # filtered (KC today); CT/SB/CC have no key → allow=None → unchanged.
+    allow = None
+    if cfg.get('straddle_tickers'):
+        live_tabs = {t.upper() for t in live_opts_map_s.keys()}
+        allow = live_tabs or cfg['straddle_tickers']
+
     for ticker in expiry_list:
+        if allow is not None and ticker.upper() not in allow:
+            continue
         lt    = last_trade.get(ticker)
         label = expiry_labels.get(ticker)
         if not lt:
