@@ -66,6 +66,7 @@ _BBG_OPT_BACKUP = os.path.join(_BBG_BACKUP_DIR, 'ct_options_bloomberg.csv')
 _BBG_FUT_BACKUP = os.path.join(_BBG_BACKUP_DIR, 'ct_futures_bloomberg.csv')
 LOCAL_KC_OPT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_kc_options_history.csv')
 LOCAL_KC_FUT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_kc_futures_history.csv')
+LOCAL_KC_SPR_HISTORY = os.path.join(os.path.dirname(__file__), 'local_kc_futures_spreads_history.csv')
 LOCAL_SB_OPT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_sb_options_history.csv')
 LOCAL_SB_FUT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_sb_futures_history.csv')
 LOCAL_CC_OPT_HISTORY = os.path.join(os.path.dirname(__file__), 'local_cc_options_history.csv')
@@ -143,6 +144,7 @@ COMMODITY_CONFIG = {
     'KC': {
         'prefix': 'KC', 'name': 'ICE Coffee C',
         'opt_csv': LOCAL_KC_OPT_HISTORY, 'fut_csv': LOCAL_KC_FUT_HISTORY,
+        'spr_csv': LOCAL_KC_SPR_HISTORY,
         'std_months': frozenset({3, 5, 7, 9, 12}), 'excl_months': frozenset(),
         'serial_map': {8: 9},
         'expiry_override': ICE_KC_EXPIRY,
@@ -3076,6 +3078,99 @@ def _load_generic_data(commodity):
             )}
         rtd_spreads = {key: d for key, d in (rtd.get('spreads') or {}).items()}
 
+    # ── KC post-settle true-settle re-lock (KC only; mirrors cotton 1311-1351) ──
+    # settle_watcher_kc writes the TRUE ICE settle (+ high/low/vol/OI) to the
+    # local KC futures CSV after close. When RTD is offline/missing post-settle,
+    # fill any None live_futures field from that CSV row so settled values are
+    # correct regardless of workbook state. Fill-if-None: live RTD wins when
+    # present; the watcher's true settle fills the gaps. CT/SB/CC skip this.
+    if commodity == 'KC':
+        _fut_dates = [(_r.get('date') or '').strip() for _r in comm_fut
+                      if (_r.get('date') or '').strip()]
+        _fut_last  = max(_fut_dates) if _fut_dates else ''
+        _today_fb  = datetime.now().strftime('%Y-%m-%d')
+        if _fut_last == _today_fb:
+            def _fv(v):
+                try: return float(v) if v not in (None, '') else None
+                except (ValueError, TypeError): return None
+            for _row in comm_fut:
+                if (_row.get('date') or '').strip() != _fut_last:
+                    continue
+                _tkr_raw = (_row.get('contract') or '').strip()
+                if not _tkr_raw:
+                    continue
+                # Watcher writes ICE codes (KCN6, 4 chars); feed-history rows are
+                # old ordinal format (KCMAR1, 6 chars) — translate the latter to
+                # ICE code so the key matches live_futures (ICE-keyed from RTD).
+                _tkr = _tkr_raw if len(_tkr_raw) == 4 \
+                       else (_generic_to_ice_code(_tkr_raw, _fut_last) or _tkr_raw)
+                if _tkr not in live_futures:
+                    live_futures[_tkr] = {}
+                _lf = live_futures[_tkr]
+                for _csv_key, _lf_key in [
+                    ('settle',     'settle'),
+                    ('yest_settle','yest_settle'),
+                    ('high',       'high'),
+                    ('low',        'low'),
+                    ('volume',     'volume'),
+                    ('efp_vol',    'efp_vol'),
+                    ('efs_vol',    'efs_vol'),
+                    ('block_vol',  'block_vol'),
+                    ('open_int',   'oi'),
+                    ('oi_chg',     'oi_chg'),
+                ]:
+                    if _lf.get(_lf_key) is None:
+                        _lf[_lf_key] = _fv(_row.get(_csv_key))
+                _s, _y = _lf.get('settle'), _lf.get('yest_settle')
+                if _lf.get('change') is None and _s is not None and _y is not None and _y:
+                    _lf['change']  = round(_s - _y, 4)
+                    _lf['pct_chg'] = round((_s - _y) / _y * 100, 4)
+
+        # ── KC spreads CSV fallback (mirrors cotton 1353-1393, generic) ──────
+        # settle_watcher_kc writes calendar spreads to the KC spreads CSV after
+        # close. The KC GitHub feed carries NO spread rows, so when RTD is
+        # offline post-settle this is the only source of spread H/L/V/settle.
+        if cfg.get('spr_csv') and _fut_last == _today_fb:
+            _spr_by_key_fb = {}
+            try:
+                with open(cfg['spr_csv'], encoding='utf-8') as _ssf:
+                    for _ssr in csv.DictReader(_ssf):
+                        _sk = (_ssr.get('contract') or '').strip()
+                        _sd = (_ssr.get('date') or '').strip()
+                        if _sk and _sd and (_sk not in _spr_by_key_fb or _sd > _spr_by_key_fb[_sk]['date']):
+                            _spr_by_key_fb[_sk] = _ssr
+            except Exception:
+                pass
+            def _sfv(v):
+                try: return float(v) if v not in (None, '') else None
+                except (ValueError, TypeError): return None
+            for _sk, _scr in _spr_by_key_fb.items():
+                if (_scr.get('date') or '').strip() != _fut_last:
+                    continue
+                _sh = _sfv(_scr.get('high')); _sl = _sfv(_scr.get('low')); _svol = _sfv(_scr.get('volume'))
+                if _sk not in rtd_spreads:
+                    _sparts = _sk.split('/')
+                    if len(_sparts) == 2:
+                        _spn = parse_generic_ticker(_sparts[0], prefix)
+                        _spf = parse_generic_ticker(_sparts[1], prefix)
+                        _sdisp = (f"{MONTH_NAME[_spn[2]]}{str(_spn[1])[-2:]}/{MONTH_NAME[_spf[2]]}{str(_spf[1])[-2:]}"
+                                  if _spn and _spf else _sk)
+                        _ss_stt = _sfv(_scr.get('settle')); _ss_ys = _sfv(_scr.get('yest_settle'))
+                        _ss_chg = _sfv(_scr.get('change'))
+                        _ss_pct = round(_ss_chg / _ss_ys * 100, 2) if (_ss_chg is not None and _ss_ys and _ss_ys != 0) else None
+                        rtd_spreads[_sk] = {
+                            'display': _sdisp, 'settle': _ss_stt, 'yest_settle': _ss_ys,
+                            'change': _ss_chg, 'pct_chg': _ss_pct,
+                            'high': _sh, 'low': _sl, 'volume': _svol,
+                            'block_vol': _sfv(_scr.get('block_vol')),
+                            'efs_vol': _sfv(_scr.get('efs_vol')),
+                            'efp_vol': _sfv(_scr.get('efp_vol')),
+                        }
+                else:
+                    for _sfk, _scv in [('high', _sh), ('low', _sl), ('volume', _svol)]:
+                        if rtd_spreads[_sk].get(_sfk) is None:
+                            rtd_spreads[_sk][_sfk] = _scv
+
     # ── Live smile from ICE RTD option bid/ask ────────────────────────────────
     live_smile     = {}
     live_smile_fwd = {}
@@ -3524,9 +3619,17 @@ def compute_skew_history(commodity='CT'):
         ordinal = meta['std_y'] - first_year + 1
         if not (1 <= ordinal <= 3):
             continue
+        # Seed forward from the futures CSV (ordinal-keyed, e.g. KCJUL1). This may
+        # be missing once the settle watcher starts writing ICE-code rows (KCN6)
+        # for recent dates — the ordinal key no longer resolves. Do NOT abort on a
+        # missing seed: the put-call parity override below derives the forward from
+        # the options themselves and does not need the seed. Only abort if BOTH the
+        # seed and parity fail to produce a usable forward. (Before this fix the
+        # early-continue silently dropped every date after the format switch — it
+        # had already clipped cotton's skew history at 2026-05-28.)
         fwd = generic_settle.get(f"{prefix}{meta['suffix']}{ordinal}", {}).get(d)
-        if not fwd or fwd <= 0:
-            continue
+        if fwd is not None and fwd <= 0:
+            fwd = None
 
         # Override with put-call parity implied forward, same as load_data()
         by_strike_parity = {}
@@ -3544,6 +3647,10 @@ def compute_skew_history(commodity='CT'):
         if len(implied_Fs) >= 3:
             implied_Fs.sort()
             fwd = implied_Fs[len(implied_Fs) // 2]
+
+        # Neither futures seed nor parity gave a forward — can't place strikes.
+        if not fwd or fwd <= 0:
+            continue
 
         strikes = set(r['strike'] for r in rows_d if r['px'] > 0)
         if not strikes:
@@ -4204,10 +4311,22 @@ def api_save_eod_snapshot():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Per-commodity watcher metadata: lock-file basename + settlement window (ET).
+# CT values are exactly the originals (window 14:25–16:00) so cotton is unchanged.
+# KC window 13:28–15:00 mirrors settle_watcher_kc.py (snapshot 13:28 → hard stop 15:00).
+_WATCHER_META = {
+    'CT': {'lock': 'settle_watcher.lock',    'win_start': (14, 25), 'win_end': (16, 0)},
+    'KC': {'lock': 'settle_watcher_kc.lock', 'win_start': (13, 28), 'win_end': (15, 0)},
+}
+
+
 @server.route('/api/watcher-status', methods=['GET'])
 def api_watcher_status():
-    """Check whether settle_watcher.py is currently running (via its lock file)."""
-    _lock = os.path.join(os.path.dirname(__file__), '..', 'Options_flow_analyzer', 'settle_watcher.lock')
+    """Check whether the settle watcher for the requested commodity is running
+    (via its lock file). ?commodity=CT|KC (defaults to CT)."""
+    commodity = (request.args.get('commodity') or 'CT').strip().upper()
+    meta = _WATCHER_META.get(commodity, _WATCHER_META['CT'])
+    _lock = os.path.join(os.path.dirname(__file__), '..', 'Options_flow_analyzer', meta['lock'])
     _lock = os.path.normpath(_lock)
     running = False
     pid = None
@@ -4224,19 +4343,20 @@ def api_watcher_status():
                 running = True  # lock file present, assume live
         except (OSError, ValueError):
             running = False  # unreadable or stale lock
-    # Determine if we're in the settlement window (14:25–16:00 ET on a trading day)
+    # Determine if we're in the settlement window (per-commodity, ET, trading day).
     try:
         from zoneinfo import ZoneInfo as _ZI
     except ImportError:
         from backports.zoneinfo import ZoneInfo as _ZI
     _now = datetime.now(_ZI('America/New_York'))
     _today_str = _now.strftime('%Y-%m-%d')
+    _hm = (_now.hour, _now.minute)
     _in_window = (_is_ct_trading_day(_today_str)
-                  and (14, 25) <= (_now.hour, _now.minute) <= (16, 0))
+                  and meta['win_start'] <= _hm <= meta['win_end'])
     # Both settled today → watcher has completed its job, no warning needed
     _both_settled = False
     try:
-        _sp = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+        _sp = os.path.join(os.path.dirname(__file__), _settle_status_filename(commodity))
         with open(_sp, encoding='utf-8') as _sf:
             _ss = json.load(_sf)
         _both_settled = (_ss.get('date') == _today_str
@@ -4248,12 +4368,22 @@ def api_watcher_status():
                     'both_settled': _both_settled})
 
 
+def _settle_status_filename(commodity):
+    """Status-file basename per commodity. CT keeps the original name so cotton's
+    behavior is byte-for-byte unchanged; KC/SB/CC use settle_status_<comm>.json
+    (written by settle_watcher_<comm>.py)."""
+    c = (commodity or 'CT').strip().upper()
+    return 'settle_status.json' if c == 'CT' else f'settle_status_{c.lower()}.json'
+
+
 @server.route('/api/settle-status', methods=['GET'])
 def api_settle_status():
-    """Return settlement status written by settle_watcher.py.
-    Used by the dashboard frontend to auto-refresh and show the settlement banner."""
+    """Return settlement status written by the settle watcher for the requested
+    commodity (?commodity=CT|KC|SB|CC; defaults to CT). Used by the dashboard
+    frontend to auto-refresh and show the settlement banner."""
     import json as _json
-    status_path = os.path.join(os.path.dirname(__file__), 'settle_status.json')
+    commodity = (request.args.get('commodity') or 'CT').strip().upper()
+    status_path = os.path.join(os.path.dirname(__file__), _settle_status_filename(commodity))
     if not os.path.exists(status_path):
         return jsonify({'futures_settled': False, 'options_settled': False,
                         'date': None, 'futures_time': None, 'options_time': None})

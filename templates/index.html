@@ -3649,9 +3649,24 @@ function _showBanner(type, text, date) {
   if(el && txt){ txt.textContent = text; el.style.display = 'flex'; }
 }
 
+// Settle/watcher banners follow the ACTIVE commodity tab. Each watcher writes
+// its own settle_status_<comm>.json; the endpoints take ?commodity=. When the
+// user switches tabs, reset the new-event baseline + clear banners so a prior
+// commodity's settled state doesn't leak onto another that hasn't settled.
+let _settleStatusComm = null;
 async function _pollSettleStatus(){
   try {
-    const resp = await fetch('/api/settle-status');
+    const comm = (D && D.commodity) ? D.commodity : 'CT';
+    if(comm !== _settleStatusComm){
+      _settleStatusComm = comm;
+      _lastSettleStatus = null;            // reset diff baseline on tab switch
+      // Clear both banners on tab switch (not a user dismissal — no sticky flag).
+      ['fut','opt'].forEach(function(t){
+        const _b = document.getElementById('settle-banner-' + t);
+        if(_b) _b.style.display = 'none';
+      });
+    }
+    const resp = await fetch('/api/settle-status?commodity=' + encodeURIComponent(comm));
     if(!resp.ok) return;
     const s = await resp.json();
     if(!s || !s.date) return;
@@ -3674,10 +3689,10 @@ async function _pollSettleStatus(){
     if(s.options_settled)
       _showBanner('opt', '⚡ Options settled — ' + (s.options_time || ''), s.date);
 
-    // Auto-reload data on any new settlement event
+    // Auto-reload data on any new settlement event (only for the active commodity)
     if(newFut || newOpt){
-      console.log('[settle] Settlement detected (' + (newFut?'futures ':'') + (newOpt?'options':'') + ') — reloading data');
-      await loadAndRender(D.commodity || 'CT');
+      console.log('[settle] Settlement detected (' + (newFut?'futures ':'') + (newOpt?'options':'') + ') for ' + comm + ' — reloading data');
+      await loadAndRender(comm);
     }
   } catch(e) { /* silently ignore network errors */ }
 }
@@ -3689,7 +3704,8 @@ setInterval(_pollSettleStatus, 60000);
 // ── Watcher-down alert — polls every 90s during settlement window ─────────────
 async function _pollWatcherStatus(){
   try {
-    const resp = await fetch('/api/watcher-status');
+    const comm = (D && D.commodity) ? D.commodity : 'CT';
+    const resp = await fetch('/api/watcher-status?commodity=' + encodeURIComponent(comm));
     if(!resp.ok) return;
     const s = await resp.json();
     const banner = document.getElementById('watcher-down-banner');
