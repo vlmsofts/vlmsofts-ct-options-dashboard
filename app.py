@@ -156,6 +156,10 @@ COMMODITY_CONFIG = {
         # edit this set and restart. Serial months (Q/V etc.) and sparse far
         # months are intentionally excluded by not opening tabs for them.
         'straddle_tickers': frozenset({'KCN6', 'KCU6', 'KCZ6', 'KCH7', 'KCK7'}),
+        # KC options trade on a 2.5-cent strike grid (verified: ICE OMON, ICE
+        # platform, RTD sheet). Force any computed straddle ATM onto this grid so
+        # an integer fallback can never display an off-grid strike (e.g. 243).
+        'strike_increment': 2.5,
     },
     'SB': {
         'prefix': 'SB', 'name': 'ICE Sugar No. 11',
@@ -3337,6 +3341,11 @@ def _load_generic_data(commodity):
         atm   = min(avail, key=lambda k: abs(k - fwd)) if avail else atm_strike.get(ticker)
         if not atm:
             continue
+        # Snap ATM onto the commodity's strike grid (KC = 2.5c). Guards against an
+        # integer fallback ever displaying an off-grid strike. KC-only via config.
+        _inc = cfg.get('strike_increment')
+        if _inc:
+            atm = round(atm / _inc) * _inc
 
         # Live straddle value: bid/offer mid → last → settle at ATM
         today_c = today_p = None
