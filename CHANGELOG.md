@@ -2,6 +2,22 @@
 
 ---
 
+## EOD snapshot date-shift fix + contract tickers + auto-backfill on options-settle (2026-06-12)
+
+### [fix] eod_snapshot.json paired yesterday's options-date with today's futures settles
+
+**Root cause:** `_assemble_eod_data()` returns `'date': d.get('last_date')`, where `last_date` is the max of the **options** history dates (`load_data`), but `ct1/2/3_settle` come from the **futures** data. Futures settle ~1 hr before options (observed 2026-06-11: futures 14:34 ET, options 15:37 ET). A snapshot written in that window stamps yesterday's options-date onto today's futures prices. Evidence: on-disk snapshot read `{date:2026-06-10, ct1_settle:72.49}` while CTN6 was 71.10 on 06-10 and 72.49 on 06-11. Separately, the snapshot carried no contract identity, so the downstream carry calc could not compute the true calendar-month gap.
+
+**Fix (design):** Make the settle-watcher the canonical EOD writer — it POSTs to `/api/save-eod-snapshot` only once options-settlement is confirmed, so options-date == futures-date == today and the date-shift is structurally eliminated. Manual "Save Snapshot" and the Push-to-Site side-effect remain as fallbacks. Three surgical edits to `app.py`:
+
+1. `_assemble_eod_data()` futures loop (~4157): added `'ticker': tkr,` to each `futures_rows` entry (raw ICE ticker, e.g. CTN6).
+2. `_write_eod_snapshot()` `extracted` dict (~4388–4390): added `ct1_ticker`/`ct2_ticker`/`ct3_ticker` from `std_futs[0..2].get('ticker')` (None-guarded on length).
+3. `/api/save-eod-snapshot` (~4467): after a successful `_write_eod_snapshot(data)`, call `_spawn_append_backfill()`. This endpoint uses `skip_if_same_date=False` so the write always succeeds; the unconditional spawn is safe because `append_backfill.py` has its own duplicate-date guard (no-ops on an already-present date).
+
+Coordinated multi-repo change: the settle-watcher repo adds the options-settle POST; market-intelligence's `append_backfill.py` is updated separately (not touched here). Shared contract: snapshot gains `ct{1,2,3}_ticker`; watcher calls `http://127.0.0.1:5050/api/save-eod-snapshot`.
+
+---
+
 ## Serial month straddle ATM vol identical to standard month (2026-06-05)
 
 ### [fix] CTU6 showing same ATM vol as CTZ6 post-settlement

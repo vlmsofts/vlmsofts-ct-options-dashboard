@@ -4154,6 +4154,7 @@ def _assemble_eod_data():
             pct = round(chg / yest * 100, 2)
         futures_rows.append({
             'label':      lbl,
+            'ticker':     tkr,
             'settle':     stt,
             'yest_settle': yest,
             'change':     chg,
@@ -4384,6 +4385,9 @@ def _write_eod_snapshot(data, skip_if_same_date=False):
         'ct1_settle': _settle(0),
         'ct2_settle': _settle(1),
         'ct3_settle': _settle(2),
+        'ct1_ticker': std_futs[0].get('ticker') if len(std_futs) > 0 else None,
+        'ct2_ticker': std_futs[1].get('ticker') if len(std_futs) > 1 else None,
+        'ct3_ticker': std_futs[2].get('ticker') if len(std_futs) > 2 else None,
         'atm_iv_30d': atm_iv_30d,
         'hv30':       hv30,
         'hv60':       hv60,
@@ -4455,6 +4459,12 @@ def api_save_eod_snapshot():
 
     try:
         extracted, _ = _write_eod_snapshot(data)
+        # Canonical EOD writer: settle-watcher POSTs here once options-settlement is
+        # confirmed, so options-date == futures-date == today (date-shift eliminated).
+        # After a successful write, auto-run append_backfill.py (zero manual steps).
+        # Fire-and-forget; it has its own duplicate-date guard so an unconditional
+        # spawn is a safe no-op on an already-present date.
+        _spawn_append_backfill()
         return jsonify({'success': True, 'path': _EOD_SNAPSHOT_PATH, 'data': extracted})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
