@@ -4312,6 +4312,10 @@ def _assemble_eod_data():
 
     return {
         'date':      d.get('last_date'),
+        # today_et: the live ET session date the RTD settles belong to. The EOD
+        # snapshot stamps THIS (not 'date', which is the options-CSV last_date and
+        # lags one business day). Email still uses 'date'. now_et computed above.
+        'today_et':  now_et.strftime('%Y-%m-%d'),
         'time_et':   time_et,
         'straddles': straddles,
         'futures':   futures_rows,
@@ -4381,7 +4385,9 @@ def _write_eod_snapshot(data, skip_if_same_date=False):
     hv60 = round(hv0['hv60'] * 100, 2) if hv0.get('hv60') is not None else None
 
     extracted = {
-        'date':       data.get('date'),
+        # today's ET session date (the date the live RTD settles belong to), not
+        # data['date'] which is the options-CSV last_date and lags one business day.
+        'date':       data.get('today_et') or data.get('date'),
         'ct1_settle': _settle(0),
         'ct2_settle': _settle(1),
         'ct3_settle': _settle(2),
@@ -4449,13 +4455,48 @@ def api_save_eod_snapshot():
     """
     Assemble EOD data (shared with /api/eod-email), extract a compact
     snapshot, and write it to the market-intelligence data folder.
+
+    Cotton-only: this produces the cotton SIGNAL-MODEL backfill row
+    (eod_snapshot.json -> append_backfill.py -> cotton backfill CSV). Daily RAW
+    history for every commodity is already persisted automatically by
+    _persist_today_generic; this button is NOT that. Refuse non-CT so pressing
+    Save on another tab can never silently overwrite the cotton snapshot.
     """
+    commodity = (request.args.get('commodity') or 'CT').strip().upper()
+    if commodity != 'CT':
+        return jsonify({
+            'success': False,
+            'error': (f'{commodity} has no EOD signal-backfill pipeline — only '
+                      f'cotton (CT) does. Its raw daily data is already saved '
+                      f'automatically; nothing to snapshot here.'),
+        }), 400
     try:
         data = _assemble_eod_data()
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
     if 'error' in data:
         return jsonify({'success': False, 'error': data['error']}), 500
+
+    # Gate on OPTIONS settlement: the backfill needs settled options IV (atm_iv_30d
+    # comes from the live straddle, which is non-final until options settle). Refuse
+    # unless settle_status.json shows options_settled for THIS session date. The
+    # settle-watcher writes options_settled=true *before* it POSTs here, so its
+    # canonical EOD fire passes; this blocks only a premature manual press.
+    _today_et = data.get('today_et')
+    try:
+        with open(os.path.join(os.path.dirname(__file__), 'settle_status.json'),
+                  encoding='utf-8') as _ssf:
+            _ss = json.load(_ssf)
+        _opts_settled = bool(_ss.get('date') == _today_et and _ss.get('options_settled'))
+    except Exception:
+        _opts_settled = False
+    if not _opts_settled:
+        return jsonify({
+            'success': False,
+            'error': (f'Options have not settled yet for {_today_et} — the snapshot '
+                      f'would carry non-final IV. The settle-watcher fires this '
+                      f'automatically once options settle; no manual save needed.'),
+        }), 409
 
     try:
         extracted, _ = _write_eod_snapshot(data)

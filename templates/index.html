@@ -801,8 +801,9 @@ tr:hover td{background:var(--surf2)}
         style="background:#1a3a6e;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5">↑ Push to Site</button>
       <button id="eod-email-btn" onclick="draftEodEmail()" disabled
         style="background:#2c3e50;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5">✉ Draft Email</button>
-      <button id="eod-snapshot-btn" onclick="saveEodSnapshot()"
-        style="background:#0d7a4f;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer">💾 Save Snapshot</button>
+      <button id="eod-snapshot-btn" onclick="saveEodSnapshot()" disabled
+        title="Automatic: the EOD snapshot + backfill now fire when settle_watcher.py confirms options settlement. Manual save no longer needed — remove 'disabled' to re-enable as a fallback."
+        style="background:#0d7a4f;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:not-allowed;opacity:.5">💾 Auto (on settle)</button>
       <button onclick="closeEodModal()"
         style="background:#555;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer">✕ Close</button>
     </div>
@@ -4304,7 +4305,9 @@ function saveEodSnapshot(){
   const btn = document.getElementById('eod-snapshot-btn');
   const orig = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
-  fetch('/api/save-eod-snapshot', {method: 'POST'})
+  // Send the active commodity so the server can refuse a non-cotton tab instead
+  // of silently writing the cotton snapshot (only CT has a signal backfill).
+  fetch('/api/save-eod-snapshot?commodity=' + (_currentCommodity||'CT'), {method: 'POST'})
     .then(r => r.json())
     .then(j => {
       console.log('save-eod-snapshot:', j);
