@@ -4103,17 +4103,27 @@ def api_skew_history():
         return _no_cache(jsonify({'error': f'Unknown commodity: {commodity}'}))
     return _no_cache(jsonify(compute_skew_history(commodity)))
 
-def _assemble_eod_data():
+def _assemble_eod_data(commodity='CT'):
     """
-    Assembles the four-section EOD data for ICE Cotton No. 2.
+    Assembles the four-section EOD data for the given commodity (default CT).
     Straddles  — full straddle tab output (all contracts, all columns)
     Futures    — standard delivery months with all ICE RTD columns
-    Spreads    — calendar spreads direct from ICE RTD (all columns)
+    Spreads    — calendar spreads direct from ICE RTD (CT only; other commodities
+                 return [] here and derive any spreads downstream in the appender)
     HV         — 10/30/60/90-day historical volatility
     Returns a plain dict (or {'error': ...}); shared by /api/eod-email
     and /api/save-eod-snapshot so the logic lives in one place.
+
+    commodity-aware via parse_generic_ticker(prefix)/cfg['excl_months']; CT is
+    byte-identical to the old behaviour (CT prefix + excl_months == {10}).
     """
-    d = load_data('CT')
+    commodity = (commodity or 'CT').strip().upper()
+    cfg    = COMMODITY_CONFIG.get(commodity, COMMODITY_CONFIG['CT'])
+    prefix = cfg['prefix']
+    _excl  = cfg['excl_months']
+    def _parse(tkr):
+        return parse_generic_ticker(tkr, prefix)
+    d = load_data(commodity)
     if 'error' in d:
         return {'error': d['error']}
 
@@ -4131,11 +4141,11 @@ def _assemble_eod_data():
     # ── Futures: all contracts present in live_futures, calendar order ───────
     lf = d.get('live_futures', {})
     def _lf_sort_key(tkr):
-        p = parse_ct_ticker(tkr)
+        p = _parse(tkr)
         return (p[1], p[2]) if p else (9999, 99)
     std_tickers = sorted(
-        [t for t in lf if parse_ct_ticker(t)
-         and parse_ct_ticker(t)[2] not in CT_EXCLUDED_MONTHS],
+        [t for t in lf if _parse(t)
+         and _parse(t)[2] not in _excl],
         key=_lf_sort_key
     )
     futures_rows = []
@@ -4171,6 +4181,9 @@ def _assemble_eod_data():
 
     # ── Spreads: ICE RTD where available, outright-computed fallback ─────────
     # Order: consecutive standard months, then front Dec/back Dec year spread.
+    # Spreads from the loader's rtd_spreads (RTD + CSV merge) plus a per-commodity
+    # spreads-CSV fallback for high/low/volume. KC/SB/CC use cfg['spr_csv']; CT has
+    # no spr_csv key so it falls back to LOCAL_SPR_HISTORY (unchanged behaviour).
     rtd_spr = d.get('rtd_spreads', {})
     spread_rows = []
     seen_pairs  = set()
@@ -4178,7 +4191,7 @@ def _assemble_eod_data():
     # Load spreads CSV — most recent row per contract for high/low/volume fallback
     _spr_csv = {}
     try:
-        with open(LOCAL_SPR_HISTORY, encoding='utf-8') as _sf:
+        with open(cfg.get('spr_csv', LOCAL_SPR_HISTORY), encoding='utf-8') as _sf:
             for _sr in csv.DictReader(_sf):
                 _k = (_sr.get('contract') or '').strip()
                 _dt = (_sr.get('date') or '').strip()
@@ -4199,7 +4212,7 @@ def _assemble_eod_data():
         yest = round(yst_n - yst_f, 4) if (yst_n is not None and yst_f is not None) else None
         chg  = round(stt - yest, 4) if yest is not None else None
         pct  = round(chg / yest * 100, 2) if (chg is not None and yest and yest != 0) else None
-        p_n = parse_ct_ticker(near); p_f = parse_ct_ticker(far)
+        p_n = _parse(near); p_f = _parse(far)
         disp = f"{MONTH_NAME[p_n[2]]}{str(p_n[1])[-2:]}/{MONTH_NAME[p_f[2]]}{str(p_f[1])[-2:]}" if p_n and p_f else f'{near}/{far}'
         return {'display': disp, 'settle': stt, 'yest_settle': yest, 'change': chg,
                 'pct_chg': pct, 'high': None, 'low': None, 'volume': None,
@@ -4214,7 +4227,7 @@ def _assemble_eod_data():
         csv_r = _spr_csv.get(key)
         if not csv_r:
             return None
-        p_n = parse_ct_ticker(near); p_f = parse_ct_ticker(far)
+        p_n = _parse(near); p_f = _parse(far)
         disp = (f"{MONTH_NAME[p_n[2]]}{str(p_n[1])[-2:]}/{MONTH_NAME[p_f[2]]}{str(p_f[1])[-2:]}"
                 if p_n and p_f else key)
         stt  = _fv(csv_r.get('settle'))
@@ -4239,7 +4252,7 @@ def _assemble_eod_data():
     # consecutive-pair generation. Order: near-leg calendar, then far-leg.
     # Dec/Dec year spread inserted immediately after the first Dec-near pair.
     dec_contracts = sorted(
-        [t for t in lf if parse_ct_ticker(t) and parse_ct_ticker(t)[2] == 12],
+        [t for t in lf if _parse(t) and _parse(t)[2] == 12],
         key=_lf_sort_key
     )
     year_spread_key = (f'{dec_contracts[0]}/{dec_contracts[1]}'
@@ -4260,13 +4273,13 @@ def _assemble_eod_data():
         parts = key.split('/')
         if len(parts) != 2:
             return (9999, 99, 9999, 99)
-        pn = parse_ct_ticker(parts[0]); pf = parse_ct_ticker(parts[1])
+        pn = _parse(parts[0]); pf = _parse(parts[1])
         return ((pn[1], pn[2]) if pn else (9999, 99)) + ((pf[1], pf[2]) if pf else (9999, 99))
 
     def _has_excluded_leg(key):
         for leg in key.split('/'):
-            p = parse_ct_ticker(leg)
-            if p and p[2] in CT_EXCLUDED_MONTHS:
+            p = _parse(leg)
+            if p and p[2] in _excl:
                 return True
         return False
 
@@ -4286,7 +4299,7 @@ def _assemble_eod_data():
         near, far = parts[0], parts[1]
         _add_spread(key, near, far)
         # Insert Dec/Dec year spread right after first row whose near leg is Dec
-        pn = parse_ct_ticker(near)
+        pn = _parse(near)
         if (not year_spread_inserted and year_spread_key
                 and pn and pn[2] == 12
                 and year_spread_key not in seen_pairs):
@@ -4345,21 +4358,27 @@ _EOD_SNAPSHOT_PATH = os.path.join(
 )
 
 
-def _write_eod_snapshot(data, skip_if_same_date=False):
-    """Extract the compact CT snapshot from already-assembled EOD `data` and write
-    it to _EOD_SNAPSHOT_PATH. Returns (extracted_dict, wrote_bool).
+def _write_eod_snapshot(data, skip_if_same_date=False, commodity='CT'):
+    """Extract the compact snapshot from already-assembled EOD `data` and write it
+    to the per-commodity snapshot path. Returns (extracted_dict, wrote_bool).
 
     This is the exact extract+write logic that used to live inline in
-    api_save_eod_snapshot(); both that endpoint and push_to_vlm() now call it so
-    the logic has one home. CT-only by construction — `data` comes from
-    _assemble_eod_data() which is hardcoded load_data('CT').
+    api_save_eod_snapshot(); the endpoint and push_to_vlm() call it so the logic
+    has one home. commodity-aware: snapshot path + standard months + output key
+    prefix come from _EOD_PIPELINE / COMMODITY_CONFIG. CT is byte-identical to the
+    old behaviour (prefix 'ct', std months Mar/May/Jul/Dec, eod_snapshot.json).
 
     skip_if_same_date: when True, if the file already exists and its 'date' equals
     data['date'], skip the write (one-write-per-date failsafe for the push path).
     The manual button passes False → behaves exactly as before (always writes).
     """
-    # Standard CT delivery months only (Mar/May/Jul/Dec), matched on label text.
-    _STD_LABELS = ('Mar', 'May', 'Jul', 'Dec')
+    commodity = (commodity or 'CT').strip().upper()
+    cfg       = COMMODITY_CONFIG.get(commodity, COMMODITY_CONFIG['CT'])
+    pfx       = commodity.lower()
+    snap_path = _EOD_PIPELINE.get(commodity, _EOD_PIPELINE['CT'])['snapshot']
+    # Standard delivery months for this commodity (CT: Mar/May/Jul/Dec), matched on
+    # label text — the expired front carries a ticker-only label and is skipped.
+    _STD_LABELS = tuple(MONTH_NAME[m] for m in sorted(cfg['std_months']))
     def _is_std(row):
         lbl = (row.get('label') or '')
         return any(m in lbl for m in _STD_LABELS)
@@ -4387,30 +4406,30 @@ def _write_eod_snapshot(data, skip_if_same_date=False):
     extracted = {
         # today's ET session date (the date the live RTD settles belong to), not
         # data['date'] which is the options-CSV last_date and lags one business day.
-        'date':       data.get('today_et') or data.get('date'),
-        'ct1_settle': _settle(0),
-        'ct2_settle': _settle(1),
-        'ct3_settle': _settle(2),
-        'ct1_ticker': std_futs[0].get('ticker') if len(std_futs) > 0 else None,
-        'ct2_ticker': std_futs[1].get('ticker') if len(std_futs) > 1 else None,
-        'ct3_ticker': std_futs[2].get('ticker') if len(std_futs) > 2 else None,
-        'atm_iv_30d': atm_iv_30d,
-        'hv30':       hv30,
-        'hv60':       hv60,
+        'date':           data.get('today_et') or data.get('date'),
+        f'{pfx}1_settle': _settle(0),
+        f'{pfx}2_settle': _settle(1),
+        f'{pfx}3_settle': _settle(2),
+        f'{pfx}1_ticker': std_futs[0].get('ticker') if len(std_futs) > 0 else None,
+        f'{pfx}2_ticker': std_futs[1].get('ticker') if len(std_futs) > 1 else None,
+        f'{pfx}3_ticker': std_futs[2].get('ticker') if len(std_futs) > 2 else None,
+        'atm_iv_30d':     atm_iv_30d,
+        'hv30':           hv30,
+        'hv60':           hv60,
     }
 
     # One-write-per-date failsafe (push path only): if the file already holds this
     # date, leave it untouched.
     if skip_if_same_date and extracted.get('date') is not None:
         try:
-            with open(_EOD_SNAPSHOT_PATH, encoding='utf-8') as f:
+            with open(snap_path, encoding='utf-8') as f:
                 if json.load(f).get('date') == extracted['date']:
                     return extracted, False
         except (FileNotFoundError, ValueError):
             pass  # no file yet / unreadable → proceed to write
 
-    os.makedirs(os.path.dirname(_EOD_SNAPSHOT_PATH), exist_ok=True)
-    with open(_EOD_SNAPSHOT_PATH, 'w', encoding='utf-8') as f:
+    os.makedirs(os.path.dirname(snap_path), exist_ok=True)
+    with open(snap_path, 'w', encoding='utf-8') as f:
         json.dump(extracted, f, indent=2)
     return extracted, True
 
@@ -4424,23 +4443,42 @@ _APPEND_BACKFILL_PY = os.path.join(
     'market-intelligence', 'append_backfill.py'
 )
 
+# Per-commodity EOD signal-backfill pipeline registry. CT is the original cotton
+# pipeline (reuses the constants above); KC mirrors it with its own files so the
+# cotton snapshot/appender/status are never touched. settle_status is a basename
+# resolved against this app's directory.
+_EOD_PIPELINE = {
+    'CT': {
+        'snapshot':      _EOD_SNAPSHOT_PATH,
+        'append_py':     _APPEND_BACKFILL_PY,
+        'settle_status': 'settle_status.json',
+    },
+    'KC': {
+        'snapshot':      os.path.join(os.path.dirname(_EOD_SNAPSHOT_PATH), 'eod_snapshot_kc.json'),
+        'append_py':     os.path.join(os.path.dirname(_APPEND_BACKFILL_PY), 'append_backfill_kc.py'),
+        'settle_status': 'settle_status_kc.json',
+    },
+}
 
-def _spawn_append_backfill():
-    """Fire-and-forget: run append_backfill.py in a detached child process after a
-    NEW-date snapshot write, so EOD backfill needs zero manual steps. Runs in a
-    daemon thread (request never blocks/joins). Detached + silent on Windows
+
+def _spawn_append_backfill(commodity='CT'):
+    """Fire-and-forget: run the commodity's appender in a detached child process
+    after a NEW-date snapshot write, so EOD backfill needs zero manual steps. Runs
+    in a daemon thread (request never blocks/joins). Detached + silent on Windows
     (CREATE_NO_WINDOW, output to a log file). Any failure — missing script, error,
     timeout — is swallowed and never surfaces to the push response."""
+    commodity = (commodity or 'CT').strip().upper()
+    append_py = _EOD_PIPELINE.get(commodity, _EOD_PIPELINE['CT'])['append_py']
     def _run():
         import subprocess, sys
         try:
-            if not os.path.exists(_APPEND_BACKFILL_PY):
+            if not os.path.exists(append_py):
                 return
-            _wd  = os.path.dirname(_APPEND_BACKFILL_PY)
-            _log = os.path.join(_wd, 'append_backfill_last.log')
+            _wd  = os.path.dirname(append_py)
+            _log = os.path.join(_wd, os.path.splitext(os.path.basename(append_py))[0] + '_last.log')
             with open(_log, 'w', encoding='utf-8') as lf:
                 subprocess.run(
-                    [sys.executable, _APPEND_BACKFILL_PY],
+                    [sys.executable, append_py],
                     cwd=_wd, stdout=lf, stderr=lf,
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
                     timeout=120,
@@ -4456,22 +4494,23 @@ def api_save_eod_snapshot():
     Assemble EOD data (shared with /api/eod-email), extract a compact
     snapshot, and write it to the market-intelligence data folder.
 
-    Cotton-only: this produces the cotton SIGNAL-MODEL backfill row
-    (eod_snapshot.json -> append_backfill.py -> cotton backfill CSV). Daily RAW
-    history for every commodity is already persisted automatically by
-    _persist_today_generic; this button is NOT that. Refuse non-CT so pressing
-    Save on another tab can never silently overwrite the cotton snapshot.
+    Produces a commodity's SIGNAL-MODEL backfill row (eod_snapshot[_kc].json ->
+    append_backfill[_kc].py -> that commodity's backfill CSV). Daily RAW history
+    for every commodity is already persisted automatically by
+    _persist_today_generic; this endpoint is NOT that. Only commodities with a
+    pipeline in _EOD_PIPELINE (CT, KC) are accepted — others are refused so a Save
+    on an unsupported tab can never silently overwrite another commodity's snapshot.
     """
     commodity = (request.args.get('commodity') or 'CT').strip().upper()
-    if commodity != 'CT':
+    if commodity not in _EOD_PIPELINE:
         return jsonify({
             'success': False,
             'error': (f'{commodity} has no EOD signal-backfill pipeline — only '
-                      f'cotton (CT) does. Its raw daily data is already saved '
-                      f'automatically; nothing to snapshot here.'),
+                      f'{", ".join(sorted(_EOD_PIPELINE))} do. Its raw daily data '
+                      f'is already saved automatically; nothing to snapshot here.'),
         }), 400
     try:
-        data = _assemble_eod_data()
+        data = _assemble_eod_data(commodity)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
     if 'error' in data:
@@ -4483,8 +4522,9 @@ def api_save_eod_snapshot():
     # settle-watcher writes options_settled=true *before* it POSTs here, so its
     # canonical EOD fire passes; this blocks only a premature manual press.
     _today_et = data.get('today_et')
+    _ss_name  = _EOD_PIPELINE[commodity]['settle_status']
     try:
-        with open(os.path.join(os.path.dirname(__file__), 'settle_status.json'),
+        with open(os.path.join(os.path.dirname(__file__), _ss_name),
                   encoding='utf-8') as _ssf:
             _ss = json.load(_ssf)
         _opts_settled = bool(_ss.get('date') == _today_et and _ss.get('options_settled'))
@@ -4499,14 +4539,14 @@ def api_save_eod_snapshot():
         }), 409
 
     try:
-        extracted, _ = _write_eod_snapshot(data)
+        extracted, _ = _write_eod_snapshot(data, commodity=commodity)
         # Canonical EOD writer: settle-watcher POSTs here once options-settlement is
         # confirmed, so options-date == futures-date == today (date-shift eliminated).
-        # After a successful write, auto-run append_backfill.py (zero manual steps).
+        # After a successful write, auto-run the appender (zero manual steps).
         # Fire-and-forget; it has its own duplicate-date guard so an unconditional
         # spawn is a safe no-op on an already-present date.
-        _spawn_append_backfill()
-        return jsonify({'success': True, 'path': _EOD_SNAPSHOT_PATH, 'data': extracted})
+        _spawn_append_backfill(commodity)
+        return jsonify({'success': True, 'path': _EOD_PIPELINE[commodity]['snapshot'], 'data': extracted})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
