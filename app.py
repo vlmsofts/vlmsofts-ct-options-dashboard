@@ -10,6 +10,24 @@ try:
 except ImportError:
     _ice_rtd_reader = None
 
+# Timeout wrapper for COM reads — a stuck Excel (cell-edit / modal) hangs the
+# synchronous xlwings call indefinitely. Run in a thread pool with a hard
+# deadline so a stuck workbook never freezes the Flask request handler.
+import concurrent.futures as _cf
+_RTD_TIMEOUT = 8  # seconds; COM reads normally return in < 1s
+
+def _read_ice_workbook_safe(wb_key):
+    """Return read_ice_workbook() result or None if it times out / raises."""
+    if not _ice_rtd_reader:
+        return None
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            fut = _ex.submit(_ice_rtd_reader.read_ice_workbook, wb_key)
+            return fut.result(timeout=_RTD_TIMEOUT)
+    except (_cf.TimeoutError, Exception) as _e:
+        log.warning('RTD COM read timed out or failed (%s) — falling back to CSV', _e)
+        return None
+
 server = Flask(__name__)
 
 OPT_CSV_URL = "https://raw.githubusercontent.com/vlmsofts/oi-dashboard/main/data/options_oi.csv"
@@ -630,7 +648,7 @@ def load_data(commodity='CT'):
     rtd = None
     if _ice_rtd_reader and not _in_ct_settle_window():
         try:
-            rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook('CT'))
+            rtd = _ice_to_rtd_shape(_read_ice_workbook_safe('CT'))
         except Exception as e:
             log.debug('ICE RTD fetch skipped: %s', e)
 
@@ -1548,7 +1566,7 @@ def load_data(commodity='CT'):
     _ice_raw = None
     if _ice_rtd_reader and not _in_ct_settle_window():
         try:
-            _ice_raw = _ice_rtd_reader.read_ice_workbook('CT')
+            _ice_raw = _read_ice_workbook_safe('CT')
             if _ice_raw and _ice_raw.get('mode') == 'unavailable':
                 _ice_raw = None
         except Exception:
@@ -2715,7 +2733,7 @@ def _load_generic_data(commodity):
     rtd = None
     if _ice_rtd_reader and not _in_ct_settle_window():
         try:
-            rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook(commodity))
+            rtd = _ice_to_rtd_shape(_read_ice_workbook_safe(commodity))
         except Exception as e:
             log.debug('ICE RTD fetch skipped for %s: %s', commodity, e)
 
@@ -3974,7 +3992,7 @@ def api_debug():
     rtd = None
     if _ice_rtd_reader and not _in_ct_settle_window():
         try:
-            rtd = _ice_to_rtd_shape(_ice_rtd_reader.read_ice_workbook('CT'))
+            rtd = _ice_to_rtd_shape(_read_ice_workbook_safe('CT'))
         except Exception:
             pass
 
@@ -4943,4 +4961,4 @@ def api_draft_eod_email():
 
 
 if __name__ == '__main__':
-    server.run(debug=True, port=5050, use_reloader=True, reloader_type='stat')
+    server.run(debug=True, port=5050, use_reloader=True, reloader_type='stat', threaded=True)
