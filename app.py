@@ -1616,6 +1616,15 @@ def load_data(commodity='CT'):
     # Sep27 and Nov27 excluded until liquidity warrants inclusion
     straddle_tickers = [t for t in straddle_tickers if t not in {'CTU7', 'CTX7'}]
 
+    # Re-sort chronologically by (year, month). expiry_list is already sorted, but
+    # contracts supplemented from the live workbook above (not yet in the CSV) get
+    # appended at the end — without this re-sort a newly added contract (e.g. CTX6)
+    # displays out of sequence at the bottom of the straddle tab and EOD run.
+    def _strad_sort_key(t):
+        p = parse_ct_ticker(t)
+        return (p[1], p[2]) if p else (9999, 99)
+    straddle_tickers.sort(key=_strad_sort_key)
+
     # Price tape fallback: most-recent live mid per contract from ct_price_tape.csv.
     # Used when _ice_raw is None (COM contention) so straddle ATM reflects live prices.
     _tape_live = {}
@@ -3296,9 +3305,47 @@ def _load_generic_data(commodity):
             hv_data.setdefault(tkr, {}).update(csv_hv[tkr])
 
     # ── Straddle run — live bid/offer mid from ICE RTD ────────────────────────
+    # KC pre-close straddle freeze (13:20 ET): lock the straddle SOURCE 10 min
+    # before the 13:30 KC close so strikes + values reflect the final liquid
+    # market and stop drifting/blanking after the close. KC settle publishes
+    # ~12:25 (BEFORE this freeze), so — unlike CT's freeze — it does NOT lift on
+    # options_settled; it holds the 13:20 snapshot through EOD (cleared naturally
+    # by the per-day directory). Scoped to the straddle source only: the futures
+    # bar, vol smile and skew keep reading live `rtd`. KC-only via the
+    # 'straddle_tickers' config that only KC defines (CT/SB/CC: _strad_src = rtd).
+    _strad_src = rtd
+    if cfg.get('straddle_tickers'):
+        try:
+            from zoneinfo import ZoneInfo as _ZI_kf
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo as _ZI_kf
+        _kf_now   = datetime.now(_ZI_kf('America/New_York'))
+        _kf_hm    = (_kf_now.hour, _kf_now.minute)
+        _kf_path  = os.path.normpath(os.path.join(
+            os.path.dirname(__file__), '..', 'Options_flow_analyzer',
+            'data', _kf_now.strftime('%Y-%m-%d'), 'rtd_snap_kc.json'))
+        # Write once, only inside the 13:20–13:30 pre-close window, from a live
+        # read that actually has option quotes — never freeze post-close/stale data.
+        if ((13, 20) <= _kf_hm <= (13, 30) and rtd and rtd.get('live_options')
+                and not os.path.exists(_kf_path)):
+            try:
+                os.makedirs(os.path.dirname(_kf_path), exist_ok=True)
+                with open(_kf_path, 'w', encoding='utf-8') as _kf:
+                    json.dump({'live_options': rtd.get('live_options'),
+                               'outrights':    rtd.get('outrights')}, _kf)
+            except Exception:
+                pass
+        # Once the freeze exists, use it as the straddle source for the rest of day.
+        if os.path.exists(_kf_path):
+            try:
+                with open(_kf_path, encoding='utf-8') as _kf:
+                    _strad_src = json.load(_kf)
+            except Exception:
+                _strad_src = rtd
+
     straddles = []
-    live_opts_map_s = (rtd.get('live_options') or {}) if rtd else {}
-    outrights_map   = (rtd.get('outrights')    or {}) if rtd else {}
+    live_opts_map_s = (_strad_src.get('live_options') or {}) if _strad_src else {}
+    outrights_map   = (_strad_src.get('outrights')    or {}) if _strad_src else {}
 
     # Straddle DISPLAY filter (display + EOD only; expiry_list/CSV/skew untouched).
     # When the RTD workbook is open, show exactly the option tabs it contains
