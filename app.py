@@ -14,7 +14,7 @@ except ImportError:
 # synchronous xlwings call indefinitely. Run in a thread pool with a hard
 # deadline so a stuck workbook never freezes the Flask request handler.
 import concurrent.futures as _cf
-_RTD_TIMEOUT = 8  # seconds; COM reads normally return in < 1s
+_RTD_TIMEOUT = int(os.getenv('COM_TIMEOUT_SECONDS', '8'))  # seconds; COM reads normally return in < 1s
 
 def _read_ice_workbook_safe(wb_key):
     """Return read_ice_workbook() result or None if it times out / raises."""
