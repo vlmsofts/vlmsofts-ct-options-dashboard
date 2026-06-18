@@ -2326,8 +2326,37 @@ def _build_lt_fn_lookup(fut_path, prefix):
     return lookup
 
 
+# ── §6 unified option key (M4) ──────────────────────────────────────────────
+# VERBATIM copy of Options_flow_analyzer/pipeline/contract_calendar.make_option_key.
+# Cross-repo import is impossible, so the logic is duplicated here and locked to
+# byte-identical output by the key-parity test (test_vlm_key_parity.py). If the
+# canonical helper changes, this copy MUST change with it.
+_PUT_CALL_NORM = {'C': 'C', 'P': 'P', 'CALL': 'C', 'PUT': 'P'}
+
+
+def make_option_key(contract, strike, put_call):
+    """Return the unified VLM option key, e.g. 'CTZ6-07300-C'.
+
+    contract : full ICE code, e.g. 'CTZ6'
+    strike   : float, e.g. 73.0  -> strike*100 zero-padded to 5 digits ('07300')
+    put_call : 'C', 'P', 'CALL', 'PUT' (case-insensitive)
+
+    strike*100 is rounded to the nearest integer so fractional strikes resolve
+    exactly (82.5 -> '08250', 73.0 -> '07300'). Raises ValueError on an
+    unrecognized put_call so a bad leg can never silently produce a wrong key.
+    """
+    code = str(contract).strip().upper()
+    pc = _PUT_CALL_NORM.get(str(put_call).strip().upper())
+    if pc is None:
+        raise ValueError(f'make_option_key: unrecognized put_call {put_call!r} '
+                         "(expected C/P/CALL/PUT)")
+    strike_int = int(round(float(strike) * 100))
+    return f'{code}-{strike_int:05d}-{pc}'
+
+
 _CT_OPT_FIELDS      = ['date','commodity','security_des','contract_month','put_call',
-                        'strike_px','open_int','oi_chg','px_settle','px_volume']
+                        'strike_px','open_int','oi_chg','px_settle','px_volume',
+                        'vlm_key']
 _GENERIC_OPT_FIELDS = ['date','commodity','security_des','strike_px',
                         'px_settle','open_int','oi_chg','px_volume']
 _FUT_FIELDS         = ['date','commodity','contract',
@@ -2382,6 +2411,8 @@ def _persist_ct_options_ice(ice_data, today_str):
                     'oi_chg':         '',
                     'px_settle':      round(float(px), 4),
                     'px_volume':      '',
+                    # §6 unified key from this row's own ICE contract + strike + C/P (M4)
+                    'vlm_key':        make_option_key(sheet_name.upper(), strike, pc_char),
                 })
 
     if not rows:
