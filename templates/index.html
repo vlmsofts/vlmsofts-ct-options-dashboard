@@ -2909,8 +2909,8 @@ function generatePng(){
       const toYb=v=>plotY+plotH-(v-yLo)/(yHi-yLo)*plotH;
       const zeroY=toYb(0);
 
-      // Y grid + labels
-      const vStep=rawMax>0.2?0.1:rawMax>0.05?0.05:0.02;
+      // Y grid + labels — vStep keyed off full range to keep ~5-8 ticks
+      const yRange=yHi-yLo, vStep=yRange>4?1.0:yRange>2?0.5:yRange>0.8?0.2:yRange>0.4?0.1:yRange>0.1?0.05:0.02;
       for(let v=Math.ceil(yLo/vStep)*vStep; v<=yHi+0.0001; v=Math.round((v+vStep)*10000)/10000){
         const py=toYb(v);
         if(py<plotY-1||py>plotY+plotH+1) continue;
