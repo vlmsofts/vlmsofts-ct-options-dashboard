@@ -4,6 +4,14 @@ from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
 
+def _load_local_env(_p=os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')):
+    if os.path.exists(_p):
+        for _ln in open(_p, encoding='utf-8'):
+            _ln=_ln.strip()
+            if _ln and not _ln.startswith('#') and '=' in _ln:
+                _k,_v=_ln.split('=',1); os.environ.setdefault(_k.strip(), _v.strip())
+_load_local_env()
+
 # ICE RTD — exclusive live data source
 try:
     import ice_rtd_reader as _ice_rtd_reader
@@ -4733,7 +4741,9 @@ def api_settle_status():
 def push_to_vlm():
     """Proxy: forwards PNG + metadata to vlmdata.com server-side (avoids browser CORS)."""
     _VLM_PUSH_URL    = 'https://vlmdata.com/api/analysis/push'
-    _VLM_PUSH_SECRET = '5c8b8dfb7aef367764d33aea1c19985a7907ae4198bc12be758a316acecabf7d'
+    _VLM_PUSH_SECRET = os.environ.get('VLM_PUSH_SECRET')
+    if not _VLM_PUSH_SECRET:
+        return jsonify({'error': 'VLM_PUSH_SECRET not set (expected in repo .env or process env)'}), 500
     try:
         files = {}
         data  = {}
