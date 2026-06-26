@@ -2375,11 +2375,11 @@ function exportTradePanel(){
   let y = hdrH+_STRIP_H+8;
 
   // KPI tiles (same as smile export)
-  const pct=D.iv_percentile[ticker], d1c=D.atm_iv_1d_chg[ticker];
+  const pct=D.iv_percentile[ticker], d1c=D.atm_iv_1d_chg[ticker], mo=D.history_months[ticker];
   const kpiDefs=[
     {lbl:'ATM IV',   val:D.atm_iv[ticker]!=null?D.atm_iv[ticker].toFixed(1)+'%':'—', clr:DARK},
     {lbl:'1D CHG',   val:d1c!=null?(d1c>=0?'+':'')+d1c.toFixed(2)+' pts':'—', clr:d1c>0?GREEN:d1c<0?RED:DARK},
-    {lbl:'IV %ILE',  val:pct!=null?pct+'th %ile':'—', clr:pct==null?DARK:pct<30?GREEN:pct<70?'#d97706':RED},
+    {lbl:'ATM IV RANK'+(mo?` (${mo}mo)`:''),  val:pct!=null?pct+'th %ile':'—', clr:pct==null?DARK:pct<30?GREEN:pct<70?'#d97706':RED},
     {lbl:'25Δ SKEW', val:D.skew_direction[ticker]||'—',
      clr:D.skew_direction[ticker]==='PUTS BID'?RED:D.skew_direction[ticker]==='CALLS BID'?GREEN:'#d97706'},
     {lbl:'C/P OI',   val:D.cp_ratio[ticker]!=null?D.cp_ratio[ticker].toFixed(2):'—', clr:DARK},
@@ -2851,13 +2851,13 @@ function generatePng(){
   let y = hdrH+_STRIP_H+8;
 
   // ── KPI tiles ─────────────────────────────────────────────────────────────
-  const pct=D.iv_percentile[ticker], d1c=D.atm_iv_1d_chg[ticker];
+  const pct=D.iv_percentile[ticker], d1c=D.atm_iv_1d_chg[ticker], mo=D.history_months[ticker];
   const kpiDefs=[
     {lbl:'ATM IV',   val:D.atm_iv[ticker]!=null?D.atm_iv[ticker].toFixed(1)+'%':'—',
                      clr:DARK},
     {lbl:'1D CHG',   val:d1c!=null?(d1c>=0?'+':'')+d1c.toFixed(2)+' pts':'—',
                      clr:d1c>0?GREEN:d1c<0?RED:DARK},
-    {lbl:'IV %ILE',  val:pct!=null?pct+'th %ile':'—',
+    {lbl:'ATM IV RANK'+(mo?` (${mo}mo)`:''),  val:pct!=null?pct+'th %ile':'—',
                      clr:pct==null?DARK:pct<30?GREEN:pct<70?AMBER:RED},
     {lbl:'25Δ SKEW', val:D.skew_direction[ticker]||'—',
                      clr:D.skew_direction[ticker]==='PUTS BID'?RED:
