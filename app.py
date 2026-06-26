@@ -4939,6 +4939,7 @@ def api_draft_eod_email():
     subject  = body.get('subject', 'VLM Cotton EOD Summary')
     date_str = body.get('date_str', '')
     png_b64  = body.get('png_b64', '')
+    commodity_name = body.get('commodity_name', 'ICE Cotton No. 2')
     if not png_b64:
         return jsonify({'error': 'No PNG data'}), 400
 
@@ -4961,7 +4962,7 @@ def api_draft_eod_email():
 
     html_body = (
         f'<html><body style="font-family:Arial,sans-serif;margin:0;padding:12px">'
-        f'<p style="margin:0 0 10px 0">ICE Cotton No. 2 &mdash; End of Day Summary<br>'
+        f'<p style="margin:0 0 10px 0">{commodity_name} &mdash; End of Day Summary<br>'
         f'Date: {date_str}</p>'
         f'<img src="cid:eod_png" style="max-width:100%">'
         f'</body></html>'
