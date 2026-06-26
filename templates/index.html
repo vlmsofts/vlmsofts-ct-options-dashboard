@@ -4238,7 +4238,7 @@ function downloadEodPng(){
   const dateStr = _eodData && _eodData.date
     ? (([y,m,d]) => `${+d}_${_m[+m]}_${y}`)(_eodData.date.split('-'))
     : new Date().toISOString().slice(0,10);
-  _finishExport(_eodCanvas, `CT_EOD_${dateStr}.png`);
+  _finishExport(_eodCanvas, `${(_eodData && _eodData.commodity) || 'CT'}_EOD_${dateStr}.png`);
 }
 
 async function pushEodToSite(){
@@ -4251,7 +4251,7 @@ async function pushEodToSite(){
     if(!blob) throw new Error('Canvas export failed');
     const fd = new FormData();
     fd.append('type',  'eod');
-    fd.append('image', blob, 'CT_EOD.png');
+    fd.append('image', blob, `${(_eodData && _eodData.commodity) || 'CT'}_EOD.png`);
     if(_eodData) fd.append('data', JSON.stringify({
       straddles: _eodData.straddles || [],
       futures:   _eodData.futures   || [],
@@ -4276,6 +4276,7 @@ function draftEodEmail(){
     : new Date().toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric'});
 
   const _eodCommName = ({CT:'Cotton', KC:'Coffee', SB:'Sugar', CC:'Cocoa'})[_eodData.commodity || 'CT'] || 'Cotton';
+  const _eodNameB = ({CT:'ICE Cotton No. 2', KC:'ICE Coffee C', SB:'ICE Sugar No. 11', CC:'ICE Cocoa'})[_eodData.commodity || 'CT'] || 'ICE Cotton No. 2';
   const subject = `VLM ${_eodCommName} EOD Summary — ${dateStr}`;
   const pngB64  = _eodCanvas.toDataURL('image/png');
 
@@ -4283,14 +4284,13 @@ function draftEodEmail(){
   fetch('/api/draft-eod-email', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({subject, date_str: dateStr, png_b64: pngB64})
+    body: JSON.stringify({subject, date_str: dateStr, png_b64: pngB64, commodity_name: _eodNameB})
   })
   .then(r => r.json())
   .then(j => {
     if(j.error){
       // Fallback: download PNG + mailto if Outlook COM unavailable
       downloadEodPng();
-      const _eodNameB = ({CT:'ICE Cotton No. 2', KC:'ICE Coffee C', SB:'ICE Sugar No. 11', CC:'ICE Cocoa'})[_eodData.commodity || 'CT'] || 'ICE Cotton No. 2';
       window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(
         `${_eodNameB} — End of Day Summary\r\nDate: ${dateStr}\r\n\r\nPlease attach the PNG.`)}`;
     }
