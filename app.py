@@ -1416,6 +1416,12 @@ def load_data(commodity='CT'):
             try: return float(v) if v not in (None, '') else None
             except (ValueError, TypeError): return None
         for _sk, _scr in _spr_by_key_fb.items():
+            # Only use a CSV row from the current session. A spread is leg1-leg2 of
+            # two outrights; a row older than today means the pair wasn't quoted
+            # today, so its stale settle/H/L/V must not be injected into rtd_spreads
+            # (the assembler will compute it from today's outright legs instead).
+            if (_scr.get('date') or '').strip() != fut_last:
+                continue
             _sh = _sfv(_scr.get('high')); _sl = _sfv(_scr.get('low')); _svol = _sfv(_scr.get('volume'))
             if _sk not in rtd_spreads:
                 _sparts = _sk.split('/')
@@ -4292,14 +4298,22 @@ def _assemble_eod_data(commodity='CT'):
     spread_rows = []
     seen_pairs  = set()
 
-    # Load spreads CSV — most recent row per contract for high/low/volume fallback
+    # Load spreads CSV — most recent row per contract for high/low/volume fallback.
+    # _spr_csv_max_date is the newest date written to the file = the current EOD
+    # session. A spread is just leg1-leg2 of two outrights, so a CSV row older than
+    # that session is stale (the pair simply wasn't quoted today) and must NOT be
+    # shown — _row_from_csv rejects it so the row falls through to the live RTD
+    # value or the computed leg1-leg2 fallback.
     _spr_csv = {}
+    _spr_csv_max_date = ''
     try:
         with open(cfg.get('spr_csv', LOCAL_SPR_HISTORY), encoding='utf-8') as _sf:
             for _sr in csv.DictReader(_sf):
                 _k = (_sr.get('contract') or '').strip()
                 _dt = (_sr.get('date') or '').strip()
                 if _k and _dt:
+                    if _dt > _spr_csv_max_date:
+                        _spr_csv_max_date = _dt
                     if _k not in _spr_csv or _dt > _spr_csv[_k]['date']:
                         _spr_csv[_k] = _sr
     except Exception:
@@ -4327,9 +4341,13 @@ def _assemble_eod_data(commodity='CT'):
         except (ValueError, TypeError): return None
 
     def _row_from_csv(key, near, far):
-        """Build a spread row entirely from CSV; returns None if key not in CSV."""
+        """Build a spread row entirely from CSV; returns None if key not in CSV
+        or if the CSV row predates the current EOD session (stale — the pair
+        wasn't quoted today, so let the caller compute it from outright legs)."""
         csv_r = _spr_csv.get(key)
         if not csv_r:
+            return None
+        if (csv_r.get('date') or '').strip() != _spr_csv_max_date:
             return None
         p_n = _parse(near); p_f = _parse(far)
         disp = (f"{MONTH_NAME[p_n[2]]}{str(p_n[1])[-2:]}/{MONTH_NAME[p_f[2]]}{str(p_f[1])[-2:]}"
