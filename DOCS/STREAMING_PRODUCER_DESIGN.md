@@ -44,13 +44,25 @@ Live ICE ──push──> [resident producer: subscribe once, read live, write 
 
 | # | Question | Notes / leaning |
 |---|---|---|
-| 1 | **Analyzer coexistence** | settle_watcher holds COM 14:18–16:00; producer stand-down 14:18–16:30. A SECOND resident icepython subscription on the same box, simultaneously with settle_watcher's icepython, is the **UNTESTED 2-client case**. **GATE: analyzer sign-off required.** Options: (a) resident producer also stands down 14:18–16:30 (file ages ~132 min/day → settle takes over, acceptable since settle_watcher owns that window); (b) single shared subscriber both consume. Leaning (a) — minimal change, preserves the proven stand-down. |
+| 1 | **Analyzer coexistence** | CORRECTED 2026-06-29 from a code read: **settle_watcher.py is EXCEL-only** (`ice_rtd_reader.read_ice_workbook('CT')` at lines 488/546/591 — no `import icepython`, no `ensure_ice`). So there is NO icepython contention with settle_watcher. The ONLY icepython overlap is **`ice_eod_capture.py` / `ice_eod_capture_softs.py`** (the post-close 4:30 surface pull, via the same `ensure_ice()`), which uses `get_quotes(..., False)` one-shot. **GATE: analyzer sign-off required** — see §3.5 for the exact questions. |
 | 2 | **ATM-band re-subscription** | The ±15 strikes around ATM shift as the future moves. Need periodic re-autolist (cheap, ~0.5s/strip) to add new strikes + `clear_subscriptions` on ones that fell out, WITHOUT churning the whole book each tick. Cadence: re-autolist every N seconds (e.g. 30–60s), keep the quote read every 1–2s. |
 | 3 | **Write cadence** | ~1–2s. Atomic write (temp + rename) — already the pattern. Must not write mid-update partials. |
 | 4 | **Startup / restart / self-heal** | ICE outage → subscription drops → detect (stale values / publisher down) → `restart_publisher` or full re-`ensure_ice` + re-subscribe. Process supervisor (bat loop OR Task Scheduler) restarts the whole process if it dies. |
 | 5 | **Shape stability** | `read_ice_api` MUST keep returning `{mode, futures, spreads, options}` byte-compatibly — settle_watcher re-source + 5 cross-repo consumers depend on it. The file schema does NOT change; only HOW it's produced. |
 | 6 | **Hibernation** | `set_hibernation` — does ICE hibernate idle subscriptions and slow the first read after quiet? Test whether to disable for the resident case. |
 | 7 | **One process per commodity, or one for all?** | CT today; KC/SB/CC later. One resident process handling all 4 (more subs, one COM client) vs 4 processes (isolation, more COM clients = more coexistence risk). Leaning one process, all commodities. |
+
+## 3.5 QUESTIONS FOR THE ANALYZER (the build is gated on these)
+
+Verified from the analyzer's own code 2026-06-29: `settle_watcher.py` is Excel-only (no icepython). The only icepython process the resident producer overlaps is `ice_eod_capture.py` (post-close surface pull, `get_quotes(..., False)` one-shot, same `ensure_ice()` connector in `C:\Ice eod records\`).
+
+- **Q1 — Two icepython clients, same box, concurrently.** Can a *second* long-lived icepython process (`ensure_ice()` + a standing `subscribe=True` subscription) run at the same time as `ice_eod_capture.py`'s post-close `get_quotes` pull, without either corrupting the other's COM session or the ICE publisher? Has two-simultaneous-icepython ever been tested, or is it assumed-unsafe?
+
+- **Q2 — Does a standing subscription contaminate the post-close settled snapshot?** `ice_eod_capture.py` relies on `get_quotes` returning **frozen settled** values after the close. If the resident producer holds live subscriptions on the *same symbols* through the close, does that change what `ice_eod_capture`'s `get_quotes` returns (does the publisher serve live vs settled per-subscription, or globally)? Must the producer **`clear_subscriptions()` / stand down before the close** so the settled pull is clean?
+
+- **Q3 — Stand-down window.** Given settle_watcher is Excel-only and `ice_eod_capture` runs post-close: (a) what exact clock time does `run_all_surface.bat` fire? (b) Can the resident producer keep streaming until just before the surface pull and only stand down for *that*, instead of the current 14:18–16:30?
+
+- **Q4 — `set_timeout` scope.** Is `set_timeout` per-process or global to the ICE COM object? If global, two clients setting different timeouts will fight — does it need coordinating?
 
 ## 4. BLAST RADIUS
 
