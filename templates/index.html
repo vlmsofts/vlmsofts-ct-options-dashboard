@@ -295,6 +295,8 @@ tr:hover td{background:var(--surf2)}
 .src-live{background:#0d3a1e;color:#22c55e;border:1px solid #22c55e}
 .src-xlsx{background:#3a2a00;color:#E8C547;border:1px solid #E8C547}
 .src-csv{background:var(--surf2);color:var(--muted);border:1px solid var(--bord2)}
+.src-down{background:#3a0d0d;color:#f87171;border:1px solid #ef4444;animation:srcDownPulse 1.4s ease-in-out infinite}
+@keyframes srcDownPulse{0%,100%{opacity:1}50%{opacity:.55}}
 
 /* ── Live futures bar ── */
 #futures-bar{
@@ -1000,7 +1002,15 @@ function init(){
 
   // Source badge
   const badge = document.getElementById('src-badge');
-  if(D.data_source === 'live_rtd')   { badge.textContent = '● LIVE RTD'; badge.className = 'src-badge src-live'; }
+  // RTD feed health overrides the source badge: when the Excel ICE RTD feed is
+  // unreachable during trading hours, the dashboard is silently serving CSV/settle
+  // — surface that loudly instead of letting it look like a normal CSV day.
+  if(D.rtd_health && D.rtd_health.state === 'feed_down') {
+    badge.textContent = '⚠ RTD FEED DOWN — Excel unreachable';
+    badge.className = 'src-badge src-down';
+    badge.title = (D.rtd_health.reason || '') + ' — check ICE RTD FEED CT.xlsx is open and live';
+  }
+  else if(D.data_source === 'live_rtd')   { badge.textContent = '● LIVE RTD'; badge.className = 'src-badge src-live'; }
   else if(D.data_source === 'saved_xlsx') { badge.textContent = '◉ XLSX'; badge.className = 'src-badge src-xlsx'; }
   else { badge.textContent = 'CSV'; badge.className = 'src-badge src-csv'; }
 

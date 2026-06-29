@@ -24,10 +24,28 @@ except ImportError:
 import concurrent.futures as _cf
 _RTD_TIMEOUT = int(os.getenv('COM_TIMEOUT_SECONDS', '8'))  # seconds; COM reads normally return in < 1s
 
+# Phase 1 ICE-Connect migration: when ICE_USE_API=1, read the standalone 32-bit
+# producer's JSON (api_feed/futures_api_<C>.json) instead of the Excel workbook.
+# Default OFF — Excel remains the source until the API path is parallel-validated.
+_ICE_USE_API = os.getenv('ICE_USE_API', '0') == '1'
+
+
 def _read_ice_workbook_safe(wb_key):
-    """Return read_ice_workbook() result or None if it times out / raises."""
+    """Return the ICE source dict ({mode,futures,spreads,options}) or None.
+
+    When ICE_USE_API=1, reads the producer JSON via read_ice_api (no COM, no
+    Excel, no thread). Otherwise reads the Excel workbook via read_ice_workbook
+    in a ThreadPoolExecutor with a hard timeout (a stuck Excel must never freeze
+    the Flask request handler)."""
     if not _ice_rtd_reader:
         return None
+    if _ICE_USE_API:
+        try:
+            # read_ice_api is a plain file read — no COM, safe to call inline.
+            return _ice_rtd_reader.read_ice_api(wb_key)
+        except Exception as _e:
+            log.warning('ICE API read failed (%s) — falling back to CSV', _e)
+            return None
     try:
         with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
             fut = _ex.submit(_ice_rtd_reader.read_ice_workbook, wb_key)
@@ -623,6 +641,28 @@ def _in_ct_settle_window():
         _now = datetime.now(_ZI('America/New_York'))
         return (_is_ct_trading_day(_now.strftime('%Y-%m-%d'))
                 and (14, 25) <= (_now.hour, _now.minute) <= (16, 0))
+    except Exception:
+        return False
+
+
+def _ct_feed_should_be_live():
+    """True when the ICE RTD feed SHOULD be delivering live data right now:
+    a CT trading day, during trading hours (02:00–14:25 ET), before the settle
+    window opens. Used to tell a legitimate CSV-only state (after-hours / settle
+    window / non-trading day) apart from a broken Excel feed (RTD unreachable
+    when it should be live). Conservative: only returns True inside the window
+    where a missing feed is unambiguously a failure, so it never false-alarms."""
+    try:
+        try:
+            from zoneinfo import ZoneInfo as _ZI
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo as _ZI
+        _now = datetime.now(_ZI('America/New_York'))
+        if not _is_ct_trading_day(_now.strftime('%Y-%m-%d')):
+            return False
+        # CT Cotton No. 2 trades 02:00–14:20 ET; settle window opens 14:25.
+        # Alarm only between 02:00 and 14:25 — after that CSV-only is expected.
+        return (2, 0) <= (_now.hour, _now.minute) < (14, 25)
     except Exception:
         return False
 
@@ -2012,6 +2052,21 @@ def load_data(commodity='CT'):
             else:
                 log.debug('Auto-persist skipped: before 16:30 ET or settle_watcher ran today')
 
+    # ── RTD feed health ──────────────────────────────────────────────────────
+    # Distinguish a broken Excel feed from a legitimate CSV-only state so the UI
+    # can alarm only on real failures. 'feed_down' = the ICE RTD workbook was
+    # unreachable (rtd is None / mode unavailable) at a time it SHOULD be live.
+    if rtd:
+        _rtd_health = {'state': 'live', 'reason': data_source}
+    elif _ct_feed_should_be_live():
+        _rtd_health = {'state': 'feed_down',
+                       'reason': 'ICE RTD workbook unreachable during trading hours'}
+        log.warning('RTD feed_down: workbook unreachable during CT trading hours '
+                    '(serving CSV/settle) — check Excel ICE RTD FEED CT.xlsx')
+    else:
+        _rtd_health = {'state': 'settle_ok',
+                       'reason': 'outside trading hours / settle window'}
+
     _result = {
         'last_date':      last_date,
         'today_str':      datetime.now().strftime('%Y-%m-%d'),
@@ -2041,6 +2096,7 @@ def load_data(commodity='CT'):
         'live_futures':   live_futures,
         'rtd_spreads':    rtd_spreads,
         'data_source':    data_source,
+        'rtd_health':     _rtd_health,
         'live_smile':     live_smile,
         'live_smile_fwd': live_smile_fwd,
         'straddles':      straddles,

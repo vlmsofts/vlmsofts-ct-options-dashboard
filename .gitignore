@@ -17,8 +17,15 @@ local_*.csv
 
 # Runtime state — machine-specific, never commit
 settle_status.json
+settle_status_kc.json
 bloomberg_backup/
 ERRORS.md
+
+# ICE Connect API feed — runtime artifact written by the 32-bit producer
+api_feed/
+
+# Pre-clean CSV backups
+*.precln
 
 # Claude Code internal
 .claude/

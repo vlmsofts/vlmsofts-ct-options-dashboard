@@ -561,3 +561,60 @@ def _read_ice_workbook_inner(commodity='CT', stored_atm_settle=None):
         'spreads': spreads,
         'options': options,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ICE CONNECT API SOURCE (Phase 1 — futures only)
+# ─────────────────────────────────────────────────────────────────────────────
+# Reads the JSON written by the standalone 32-bit producer
+# (C:\Ice eod records\dashboard_futures_producer.py) and returns the SAME
+# {mode, futures, spreads, options} shape as read_ice_workbook(), so it drops in
+# transparently behind _read_ice_workbook_safe / _ice_to_rtd_shape.
+#
+# Phase 1 fills 'futures' only; 'spreads' and 'options' are {} (the dashboard
+# already falls back to CSV for those when the workbook is partial). This is the
+# Excel-free path that bypasses the corrupt-strike / COM-wedge failure modes.
+
+# Default location the producer writes to (dashboard repo \api_feed).
+API_FEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api_feed')
+
+# How old the producer JSON may be (seconds) before we treat it as stale and
+# return unavailable. Tunable via env; the producer should refresh well inside this.
+import time as _time
+
+API_MAX_AGE_SEC = int(os.getenv('ICE_API_MAX_AGE_SEC', '120'))
+
+
+def read_ice_api(commodity='CT'):
+    """Return {mode, futures, spreads, options} from the producer JSON, or
+    {'mode': 'unavailable'} if the file is missing, stale, or unreadable.
+
+    Mirrors read_ice_workbook()'s contract exactly so it is a drop-in source.
+    Phase 1: futures only (spreads/options empty)."""
+    import json as _json
+    path = os.path.join(API_FEED_DIR, f'futures_api_{commodity.upper()}.json')
+    try:
+        st = os.stat(path)
+    except OSError:
+        return {'mode': 'unavailable'}
+    # Reject a stale file — a dead producer must not look like a live feed.
+    if (_time.time() - st.st_mtime) > API_MAX_AGE_SEC:
+        return {'mode': 'unavailable'}
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = _json.load(f)
+    except Exception:
+        return {'mode': 'unavailable'}
+
+    futures = data.get('outrights') or {}
+    if not futures:
+        return {'mode': 'unavailable'}
+    mode = data.get('mode') or 'live'
+    if mode not in ('live', 'today_settle', 'prior_settle'):
+        mode = 'live'
+    return {
+        'mode':    mode,
+        'futures': futures,   # producer dict already carries the per-contract keys
+        'spreads': {},        # Phase 2
+        'options': {},        # Phase 2
+    }
