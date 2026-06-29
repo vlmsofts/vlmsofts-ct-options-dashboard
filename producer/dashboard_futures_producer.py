@@ -220,6 +220,31 @@ def _enumerate_symbols(prefix, years=(6, 7, 8)):
     return out
 
 
+# Serial OPTION months per commodity (mirror app.py serial_map, expressed as month
+# codes). These option months have NO bona-fide future of their own — they settle
+# against a forward future (CT: U/X -> Z, F -> H) — so they are NOT enumerated as
+# futures, but their OPTION chains DO exist and trade, and the dashboard straddle/
+# smile needs them. (Without this, Sep/Nov/Jan straddles sit on settle.)
+_SERIAL_OPT_MONTHS = {
+    'CT': ('F', 'U', 'X'),         # Jan, Sep, Nov  (serial_map 1->3, 9->12, 11->12)
+    'KC': ('Q',),                  # Aug (serial_map 8->9)
+    'SB': ('F', 'Q', 'U'),         # Jan, Aug, Sep (serial_map 1->3, 8->10, 9->10)
+    'CC': ('Q',),                  # Aug (serial_map 8->9)
+}
+
+
+def _enumerate_serial_option_symbols(prefix, years=(6, 7, 8)):
+    """Serial OPTION months only -> [(dash_code, ice_sym), ...] for build_options.
+    Same shape as _enumerate_symbols; these have option chains but no own future."""
+    out = []
+    for ser in _SERIAL_OPT_MONTHS.get(prefix.upper(), ()):  # month-code chars
+        m = _CODE_MON[ser]
+        for yd in years:
+            yy = (2020 + yd) % 100
+            out.append((f"{prefix.upper()}{ser}{yd}", f"{prefix.upper()} {ser}{yy:02d}"))
+    return out
+
+
 def _batched(seq, n):
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
@@ -452,16 +477,23 @@ def run_once(commodity, force=False, with_options=True):
             _today = _dt.datetime.now(_ZI('America/New_York')).strftime('%Y-%m-%d')
         except Exception:
             _today = ''
-        # Pull chains ONLY for contracts that (a) came back live in the futures pull
-        # AND (b) whose OPTIONS have not expired. A contract past option-expiry but
-        # pre-FND still trades as a future (already captured above) — its option
+        # Standard-month option chains: only contracts that (a) came back live in the
+        # futures pull AND (b) whose OPTIONS have not expired. A contract past option-
+        # expiry but pre-FND still trades as a future (captured above) — its option
         # chain is gone and autolisting it HANGS. Futures-only for those.
-        live_pairs = [
+        std_pairs = [
             (c, s) for (c, s) in fut_pairs
             if c in outrights
             and not (_today and _options_expired(c, _today, ice=ice, prefix=commodity))
         ]
-        options = build_options(ice, commodity, live_pairs)
+        # Serial-month option chains (Sep/Nov/Jan for CT etc.): real, traded chains
+        # with no own future. Same expiry guard; no `in outrights` check (they have
+        # no futures row). Without these the serial straddles sit on settle.
+        serial_pairs = [
+            (c, s) for (c, s) in _enumerate_serial_option_symbols(commodity)
+            if not (_today and _options_expired(c, _today, ice=ice, prefix=commodity))
+        ]
+        options = build_options(ice, commodity, std_pairs + serial_pairs)
 
     payload = {
         # ts intentionally omitted — the dashboard stamps read-time freshness itself.
