@@ -147,6 +147,7 @@ ICE_CT_EXPIRY = {
     'CTK8': '2028-04-13',
     'CTN8': '2028-06-09',
     'CTU8': '2028-08-18',
+    'CTZ8': '2028-11-10',
 }
 
 # ICE Coffee C option last-trading-day dates — source: ice.com/products/14/Coffee-C-Options/expiry

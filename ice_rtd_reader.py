@@ -675,9 +675,13 @@ def read_ice_api(commodity='CT'):
     mode = data.get('mode') or 'live'
     if mode not in ('live', 'today_settle', 'prior_settle'):
         mode = 'live'
+    # Phase 2: the producer now also emits live option chains keyed by contract
+    # code, in the per-strike row shape _ice_to_rtd_shape expects. Pass them
+    # through (empty {} if the producer ran with --no-options). Drives the live
+    # smile / ATM vol / live straddles.
     return {
         'mode':    mode,
         'futures': futures,   # producer dict already carries the per-contract keys
-        'spreads': {},        # Phase 2
-        'options': {},        # Phase 2
+        'spreads': {},        # Phase 3 (calendar spreads)
+        'options': data.get('options') or {},
     }

@@ -1010,7 +1010,13 @@ function init(){
     badge.className = 'src-badge src-down';
     badge.title = (D.rtd_health.reason || '') + ' — check ICE RTD FEED CT.xlsx is open and live';
   }
-  else if(D.data_source === 'live_rtd')   { badge.textContent = '● LIVE RTD'; badge.className = 'src-badge src-live'; }
+  // Live source: the Excel RTD path emits 'live_rtd'; the ICE Connect API path
+  // emits 'ice_rtd_live'. Both are a live feed -> show LIVE.
+  else if(D.data_source === 'live_rtd' || D.data_source === 'ice_rtd_live')
+    { badge.textContent = '● LIVE RTD'; badge.className = 'src-badge src-live'; }
+  // ICE Connect settle modes (today/prior) are a working API feed, just post-settle.
+  else if(D.data_source === 'ice_rtd_today_settle' || D.data_source === 'ice_rtd_prior_settle')
+    { badge.textContent = '◉ ICE SETTLE'; badge.className = 'src-badge src-xlsx'; }
   else if(D.data_source === 'saved_xlsx') { badge.textContent = '◉ XLSX'; badge.className = 'src-badge src-xlsx'; }
   else { badge.textContent = 'CSV'; badge.className = 'src-badge src-csv'; }
 
