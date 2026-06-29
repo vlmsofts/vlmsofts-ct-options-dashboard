@@ -320,7 +320,11 @@ def build_outrights(ice, prefix):
 import re as _re
 
 ATM_BAND = int(os.getenv('ICE_ATM_BAND', '15'))      # strikes each side of ATM
-OPT_FIELDS = ["Bid", "Offer", "Last", "RecSet", "OpenInt"]   # NO ImpVol — see note above
+# NOTE: options use "Ask" (NOT "Offer"). For OPTION symbols ICE returns the offer
+# side under "Ask" — "Offer" comes back None (verified live 2026-06-29). Futures use
+# "Offer". Getting this wrong drops the offer side -> no two-sided market -> the live
+# smile never renders. NO ImpVol — see note above.
+OPT_FIELDS = ["Bid", "Ask", "Last", "RecSet", "OpenInt"]
 
 # Parse 'Z26C76.5' (prefix+space already stripped) -> (right='C', strike=76.5).
 _OPT_RE = _re.compile(r'^[A-Z]\d{2}([CP])(\d+(?:\.\d+)?)$')
@@ -370,7 +374,7 @@ def build_options(ice, prefix, fut_pairs):
             vals = dict(zip(OPT_FIELDS, rec[1:]))
             leg = {
                 'bid':    _safe_float(vals.get("Bid")),
-                'offer':  _safe_float(vals.get("Offer")),
+                'offer':  _safe_float(vals.get("Ask")),   # options: offer side is "Ask"
                 'last':   _safe_float(vals.get("Last")),
                 'settle': _safe_float(vals.get("RecSet")),
                 'oi':     _safe_float(vals.get("OpenInt")),
