@@ -564,42 +564,105 @@ def _read_ice_workbook_inner(commodity='CT', stored_atm_settle=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ICE CONNECT API SOURCE (Phase 1 — futures only)
+# ICE CONNECT API SOURCE (Phase 1 — futures only)  ·  ON-DEMAND
 # ─────────────────────────────────────────────────────────────────────────────
-# Reads the JSON written by the standalone 32-bit producer
-# (C:\Ice eod records\dashboard_futures_producer.py) and returns the SAME
-# {mode, futures, spreads, options} shape as read_ice_workbook(), so it drops in
-# transparently behind _read_ice_workbook_safe / _ice_to_rtd_shape.
+# read_ice_api() returns the SAME {mode, futures, spreads, options} shape as
+# read_ice_workbook(), so it drops in transparently behind
+# _read_ice_workbook_safe / _ice_to_rtd_shape. Phase 1 fills 'futures' only.
 #
-# Phase 1 fills 'futures' only; 'spreads' and 'options' are {} (the dashboard
-# already falls back to CSV for those when the workbook is partial). This is the
-# Excel-free path that bypasses the corrupt-strike / COM-wedge failure modes.
+# NO BACKGROUND LOOP. The pull happens ON DEMAND, exactly when the dashboard
+# loads data (manual refresh, option-variable input, settlement reload) — the
+# moments the futures forward actually needs to be fresh. read_ice_api spawns the
+# standalone 32-bit producer as a subprocess when the cached JSON is missing or
+# older than the coalescing TTL, waits briefly, then reads the result. ICE
+# Connect is sub-second and stable, so the ~1s on-demand pull is invisible; a
+# blind background loop would re-pull all day to serve a page that refreshes a
+# handful of times. Fewer moving parts: no loop process to babysit.
+#
+# This stays Excel-free → immune to the corrupt-strike / COM-wedge failure modes.
+# EOD usability (straddle freeze rtd_snap.json @14:16, settle_watcher CSVs, the
+# 4:30 settled_surface, skew history, surfaces) does NOT depend on this producer —
+# those read settled CSVs and only get MORE robust on the API.
+
+import time as _time
+import subprocess as _subprocess
 
 # Default location the producer writes to (dashboard repo \api_feed).
 API_FEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api_feed')
 
-# How old the producer JSON may be (seconds) before we treat it as stale and
-# return unavailable. Tunable via env; the producer should refresh well inside this.
-import time as _time
+# Producer script + the 32-bit interpreter that runs it (icepython is 32-bit
+# main-thread-only; this dashboard is 64-bit and cannot host it in-process).
+# Both env-overridable so the paths aren't hard-locked to one machine.
+PRODUCER_SCRIPT = os.getenv(
+    'ICE_PRODUCER_SCRIPT', r'C:\Ice eod records\dashboard_futures_producer.py')
+PRODUCER_PY = os.getenv('ICE_PRODUCER_PY', 'py')
+PRODUCER_PY_ARG = os.getenv('ICE_PRODUCER_PY_ARG', '-3.13-32')
 
-API_MAX_AGE_SEC = int(os.getenv('ICE_API_MAX_AGE_SEC', '120'))
+# Coalescing TTL — reuse the existing JSON if it was written within this many
+# seconds, else spawn a fresh pull. This is NOT a background cadence; it only
+# stops a single page load (which can call read_ice_api more than once) from
+# spawning the producer twice. A human refreshing won't out-pace it.
+API_FRESH_TTL_SEC = int(os.getenv('ICE_API_FRESH_TTL_SEC', '60'))
+
+# Hard timeout on the producer subprocess so a stuck pull never wedges a request.
+PRODUCER_TIMEOUT_SEC = int(os.getenv('ICE_PRODUCER_TIMEOUT_SEC', '8'))
+
+# Serve-staleness ceiling — even after a refresh attempt, never SERVE a JSON
+# older than this. If the producer failed or stood down (14:18-16:30) and the
+# last-good file is older than this, return unavailable → the dashboard falls
+# back to Excel/CSV (correct during the stand-down: the freeze + settle_watcher
+# own that window). Must be > API_FRESH_TTL_SEC.
+API_MAX_SERVE_AGE_SEC = int(os.getenv('ICE_API_MAX_SERVE_AGE_SEC', '180'))
+
+
+def _json_age(path):
+    """Seconds since the JSON was last written, or None if it doesn't exist."""
+    try:
+        return _time.time() - os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
+def _spawn_producer(commodity):
+    """Run the 32-bit producer once to refresh the JSON. Best-effort: any failure
+    (ICE XL down, stand-down no-op, timeout) is swallowed — the caller then reads
+    whatever last-good file exists, or returns unavailable and the dashboard falls
+    back to Excel/CSV. The producer self-guards the 14:18-16:30 COM stand-down."""
+    try:
+        _subprocess.run(
+            [PRODUCER_PY, PRODUCER_PY_ARG, PRODUCER_SCRIPT, '--commodity', commodity.upper()],
+            timeout=PRODUCER_TIMEOUT_SEC,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        pass  # leave the last-good JSON in place for the caller to read
 
 
 def read_ice_api(commodity='CT'):
     """Return {mode, futures, spreads, options} from the producer JSON, or
-    {'mode': 'unavailable'} if the file is missing, stale, or unreadable.
+    {'mode': 'unavailable'} if no usable file can be produced.
 
-    Mirrors read_ice_workbook()'s contract exactly so it is a drop-in source.
+    ON DEMAND: if the cached JSON is missing or older than API_FRESH_TTL_SEC,
+    spawn the 32-bit producer to refresh it, then read. Mirrors
+    read_ice_workbook()'s contract exactly so it is a drop-in source.
     Phase 1: futures only (spreads/options empty)."""
     import json as _json
     path = os.path.join(API_FEED_DIR, f'futures_api_{commodity.upper()}.json')
-    try:
-        st = os.stat(path)
-    except OSError:
+
+    # On-demand refresh: pull only when the cached file is missing or stale.
+    age = _json_age(path)
+    if age is None or age > API_FRESH_TTL_SEC:
+        _spawn_producer(commodity)
+        age = _json_age(path)  # re-stat after the spawn
+
+    # If still no file (producer never ran, or stood down with no prior file),
+    # or the best file we have is older than the serve ceiling (producer failed /
+    # stood down and last-good is stale), serve nothing → dashboard falls back to
+    # Excel/CSV. A dead producer must never look like a live feed.
+    if age is None or age > API_MAX_SERVE_AGE_SEC:
         return {'mode': 'unavailable'}
-    # Reject a stale file — a dead producer must not look like a live feed.
-    if (_time.time() - st.st_mtime) > API_MAX_AGE_SEC:
-        return {'mode': 'unavailable'}
+
     try:
         with open(path, encoding='utf-8') as f:
             data = _json.load(f)
