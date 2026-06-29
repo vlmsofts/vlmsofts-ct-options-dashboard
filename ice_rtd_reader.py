@@ -605,7 +605,13 @@ PRODUCER_PY_ARG = os.getenv('ICE_PRODUCER_PY_ARG', '-3.13-32')
 API_FRESH_TTL_SEC = int(os.getenv('ICE_API_FRESH_TTL_SEC', '60'))
 
 # Hard timeout on the producer subprocess so a stuck pull never wedges a request.
-PRODUCER_TIMEOUT_SEC = int(os.getenv('ICE_PRODUCER_TIMEOUT_SEC', '8'))
+# A healthy full CT pull (10 futures + 17 ATM:15 option chains, each a fresh
+# 32-bit subprocess that reconnects to ICE and re-autolists every strip) measures
+# ~13s — there is no warm cache, so this is the steady cost of EVERY spawn, not
+# just the first. 20s gives that comfortable headroom; below ~14s the spawn is
+# killed mid-pull and the feed never refreshes. (A background producer loop that
+# keeps the feed warm avoids the inline spawn cost entirely — preferred at open.)
+PRODUCER_TIMEOUT_SEC = int(os.getenv('ICE_PRODUCER_TIMEOUT_SEC', '20'))
 
 # Serve-staleness ceiling — even after a refresh attempt, never SERVE a JSON
 # older than this. If the producer failed or stood down (14:18-16:30) and the
