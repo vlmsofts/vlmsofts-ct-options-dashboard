@@ -233,15 +233,40 @@ _SERIAL_OPT_MONTHS = {
 }
 
 
-def _enumerate_serial_option_symbols(prefix, years=(6, 7, 8)):
+def _contract_is_past(month_num, yd, today=None):
+    """True if a contract's delivery month is already behind us. A simple, robust
+    guard that needs no expiry schedule and no API: the delivery month of e.g. CTF6
+    (Jan-2026) is in the past today, so the contract is dead — don't generate it.
+    We compare (year, month) to (this year, this month); anything strictly earlier
+    is past. (Options expire ~1-2 months BEFORE delivery, so a delivery month that
+    has even arrived is comfortably past its option expiry — never a false skip of
+    a live chain.)"""
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+        import datetime as _dt
+        now = today or _dt.datetime.now(_ZI('America/New_York')).date()
+        full_year = 2020 + yd
+        return (full_year, month_num) < (now.year, now.month)
+    except Exception:
+        return False  # can't tell — don't skip (set_timeout still guards a hang)
+
+
+def _enumerate_serial_option_symbols(prefix, years=(6, 7, 8), today=None):
     """Serial OPTION months only -> [(dash_code, ice_sym), ...] for build_options.
-    Same shape as _enumerate_symbols; these have option chains but no own future."""
+    Same shape as _enumerate_symbols; these have option chains but no own future.
+
+    GUARD: a serial whose delivery month is already in the past is a dead contract
+    (e.g. CTF6 = Jan-26, past as of mid-2026). Autolisting a dead chain HANGS 20s,
+    so it is skipped here and never reaches get_autolist."""
+    P = prefix.upper()
     out = []
-    for ser in _SERIAL_OPT_MONTHS.get(prefix.upper(), ()):  # month-code chars
-        m = _CODE_MON[ser]
+    for ser in _SERIAL_OPT_MONTHS.get(P, ()):  # month-code chars
+        month_num = _CODE_MON[ser]
         for yd in years:
+            if _contract_is_past(month_num, yd, today):
+                continue  # past contract — don't generate a dead chain
             yy = (2020 + yd) % 100
-            out.append((f"{prefix.upper()}{ser}{yd}", f"{prefix.upper()} {ser}{yy:02d}"))
+            out.append((f"{P}{ser}{yd}", f"{P} {ser}{yy:02d}"))
     return out
 
 
@@ -474,9 +499,12 @@ def run_once(commodity, force=False, with_options=True):
             except ImportError:
                 from backports.zoneinfo import ZoneInfo as _ZI
             import datetime as _dt
-            _today = _dt.datetime.now(_ZI('America/New_York')).strftime('%Y-%m-%d')
+            _now_et = _dt.datetime.now(_ZI('America/New_York'))
+            _today = _now_et.strftime('%Y-%m-%d')
+            _today_date = _now_et.date()
         except Exception:
             _today = ''
+            _today_date = None
         # Standard-month option chains: only contracts that (a) came back live in the
         # futures pull AND (b) whose OPTIONS have not expired. A contract past option-
         # expiry but pre-FND still trades as a future (captured above) — its option
@@ -490,7 +518,7 @@ def run_once(commodity, force=False, with_options=True):
         # with no own future. Same expiry guard; no `in outrights` check (they have
         # no futures row). Without these the serial straddles sit on settle.
         serial_pairs = [
-            (c, s) for (c, s) in _enumerate_serial_option_symbols(commodity)
+            (c, s) for (c, s) in _enumerate_serial_option_symbols(commodity, today=_today_date)
             if not (_today and _options_expired(c, _today, ice=ice, prefix=commodity))
         ]
         options = build_options(ice, commodity, std_pairs + serial_pairs)
